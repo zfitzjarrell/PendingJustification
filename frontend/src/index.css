@@ -1,0 +1,230 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.5rem;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* --- Experience Themes --- */
+
+/* Modern ITSM (Default-ish but tighter) */
+body.exp-modern {
+  --radius: 0.5rem;
+  --font-sans: "Inter", system-ui, sans-serif;
+  
+  /* Modern ITSM: Muted blue-green and soft green-grey */
+  --background: 180 10% 98%; /* Near white, cool tint */
+  --foreground: 200 20% 20%;
+  
+  --primary: 185 22% 21%; /* #293E40: Muted blue-green */
+  --primary-foreground: 0 0% 98%;
+  
+  --secondary: 157 26% 61%; /* #80B6A1: Soft green-grey */
+  --secondary-foreground: 185 22% 21%;
+  
+  --muted: 210 20% 96%;
+  --muted-foreground: 210 10% 50%;
+  
+  --card: 0 0% 100%;
+  --card-foreground: 200 20% 20%;
+  
+  --border: 210 20% 90%;
+}
+
+/* Legacy Ticketing (BMC Remedy-ish) */
+body.exp-legacy {
+  --radius: 0px;
+  --font-sans: "Segoe UI", "Arial", sans-serif;
+  
+  /* Hostile density: Beige, off-grey, yellowed white */
+  --background: 50 20% 92%; /* Beige/Yellow-ish */
+  --foreground: 0 0% 10%;
+  
+  --card: 50 15% 90%; /* Slightly darker beige */
+  --card-foreground: 0 0% 10%;
+  
+  --primary: 0 35% 36%; /* Dull Red */
+  --primary-foreground: 0 0% 95%;
+  
+  --secondary: 170 30% 30%; /* Dull Green */
+  --secondary-foreground: 0 0% 95%;
+  
+  --border: 0 0% 60%; /* High contrast grey borders */
+  --input: 50 15% 85%;
+  
+  --muted: 50 10% 80%;
+  --muted-foreground: 0 0% 30%;
+}
+
+body.exp-legacy .card {
+  border-width: 2px;
+  box-shadow: 4px 4px 0px rgba(0,0,0,0.1);
+  /* Legacy: Misalign padding slightly for that uncomfortable feel */
+  padding-left: 1.1rem;
+  padding-right: 0.9rem;
+}
+
+body.exp-legacy .card .text-2xl {
+    font-family: "Courier New", monospace;
+    letter-spacing: -1px;
+}
+
+body.exp-legacy .btn {
+  text-transform: uppercase;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  border: 2px solid var(--foreground);
+}
+
+/* Classic Enterprise (HP Service Manager / Windows 95 vibes) */
+body.exp-classic {
+  --radius: 2px;
+  --font-sans: "Tahoma", "Verdana", sans-serif;
+  
+  /* Flat greys, blue-grey text */
+  --background: 0 0% 88%; /* Flat Grey */
+  --foreground: 210 20% 30%; /* Blue-grey text */
+  
+  --card: 0 0% 95%; /* Lighter flat grey */
+  --card-foreground: 210 20% 30%;
+  
+  --primary: 210 50% 44%; /* Corporate Blue-Grey */
+  --primary-foreground: 0 0% 100%;
+  
+  --secondary: 210 10% 80%;
+  --secondary-foreground: 210 20% 20%;
+  
+  --border: 210 10% 70%;
+  --muted: 0 0% 90%;
+  --muted-foreground: 210 10% 50%;
+}
+
+body.exp-classic .card, body.exp-classic button {
+  border: 1px solid #888;
+  box-shadow: inset 1px 1px 0px #fff, 1px 1px 0px #000;
+}
+
+/* Classic: Increase distance between labels and fields */
+body.exp-classic label {
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+/* Amateur Internal Tool (SharePoint / Excel Form) */
+body.exp-amateur {
+  --radius: 1rem; /* Inconsistent radius */
+  --font-sans: "Trebuchet MS", "Comic Sans MS", sans-serif;
+  
+  /* Chaos: Default browser blue, random accents */
+  --background: 0 0% 100%; /* Pure White */
+  --foreground: 0 0% 0%;
+  
+  --primary: 240 100% 50%; /* Default Blue link color */
+  --primary-foreground: 0 0% 100%;
+  
+  --secondary: 60 100% 50%; /* Random Yellow highlight */
+  --secondary-foreground: 0 0% 0%;
+  
+  --card: 0 0% 98%;
+  --card-foreground: 0 0% 0%;
+  
+  --border: 0 0% 80%;
+  --input: 0 0% 95%;
+  
+  --muted: 0 0% 90%;
+  --muted-foreground: 0 0% 40%;
+}
+
+body.exp-amateur h1, body.exp-amateur h2 {
+  font-family: "Times New Roman", serif;
+  text-decoration: underline;
+  color: blue;
+}
+
+body.exp-amateur .card {
+  border: 1px dashed red; /* "Debug" border left in */
+}
+
+/* --- Interaction Feel --- */
+
+/* Legacy: Everything feels slightly delayed and heavy */
+body.exp-legacy *, body.exp-legacy .transition-colors {
+  transition-duration: 0.3s;
+  transition-delay: 50ms;
+}
+
+/* Classic: No transitions, brutalist snap */
+body.exp-classic *, body.exp-classic .transition-colors {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Amateur: Over-animated and janky */
+body.exp-amateur button, body.exp-amateur .card {
+  transition: all 0.5s cubic-bezier(0.68, -0.6, 0.32, 1.6);
+}
