@@ -1,29 +1,40 @@
-# Databutton app
+# PendingJustification  
+### Justification as a Service (JaaS)
 
-This project consists of a FastAPI backend server and a React + TypeScript frontend application exported from Databutton.
+PendingJustification is a satirical ITSM-style application that generates professionally worded justifications, excuses, and deferrals for requests that will never be approved.
 
-## Stack
+Inspired by enterprise ticketing systems, compliance theater, and the universal state of “Pending Justification.”
 
-- React+Typescript frontend with `yarn` as package manager.
-- Python FastAPI server with `uv` as package manager.
+This project intentionally mimics the look and feel of modern and legacy IT service platforms while delivering increasingly absurd rationale through a clean API and dashboard.
+
+> This project is intentionally satirical and does not integrate with or represent ServiceNow, BMC, HP, or any real ITSM product.
+
+---
+
+## Features
+
+- Justification generation API
+- Multiple “enterprise experience” UI skins
+- Fake dashboards, tickets, SLAs, and system status
+- Deadpan corporate microcopy
+- 99.999% uptime (emotionally)
+
+---
+
+## Tech Stack
+
+- **Frontend:** React + TypeScript (Vite)
+- **Backend:** Python FastAPI
+- **Package managers:**  
+  - Frontend: yarn  
+  - Backend: uv
+- **Build tooling:** Makefile
+
+---
 
 ## Quickstart
 
-1. Install dependencies:
+### Install dependencies
 
 ```bash
 make
-```
-
-2. Start the backend and frontend servers in separate terminals:
-
-```bash
-make run-backend
-make run-frontend
-```
-
-## Gotchas
-
-The backend server runs on port 8000 and the frontend development server runs on port 5173. The frontend Vite server proxies API requests to the backend on port 8000.
-
-Visit <http://localhost:5173> to view the application.
