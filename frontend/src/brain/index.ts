@@ -9,7 +9,12 @@ const constructBaseUrl = (): string => {
     return `${window.location.origin}${API_PATH}`;
   }
 
-  return `https://api.databutton.com${API_PATH}`;
+const base =
+  (import.meta as any)?.env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
+  "https://pendingjustification-proxy.djxodus.workers.dev";
+
+return `${base}${API_PATH}`;
+
 };
 
 type BaseApiParams = Omit<RequestParams, "signal" | "baseUrl" | "cancelToken">;
