@@ -1,9 +1,9 @@
-[build]
+﻿[build]
   base = "frontend"
-  command = "yarn install && yarn build"
   publish = "dist"
+  command = "yarn install && yarn build"
 
-[build.environment]
-  YARN_ENABLE_IMMUTABLE_INSTALLS = "false"
-  YARN_NODE_LINKER = "node-modules"
-  NODE_OPTIONS = "--max-old-space-size=4096"
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
