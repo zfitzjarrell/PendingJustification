@@ -1,7 +1,15 @@
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+
+import { EnterpriseLayout } from "@/components/EnterpriseLayout";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -9,28 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { EnterpriseLayout } from "@/components/EnterpriseLayout";
-import { toast } from "sonner";
-import {
-  Loader2,
-  Copy,
-  AlertCircle,
-  Clock,
-  CheckCircle2,
-  Info,
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { useNavigate } from "react-router-dom";
+
 import {
   Tooltip,
   TooltipContent,
@@ -38,10 +25,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-// Import Types
-import { Topic, Tone, Format } from "types";
+import { Loader2, Copy, AlertCircle, Info } from "lucide-react";
 
-// Import Experience Engine
+// Import Types (keep as-is from your project)
+import { Topic, Tone } from "types";
+
+// Import Experience Engine (keep as-is)
 import { useExperience } from "utils/experience-context";
 import { getCopy } from "utils/copy-engine";
 
@@ -68,9 +57,7 @@ async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     method: "GET",
     credentials: "include",
-    headers: {
-      Accept: "application/json",
-    },
+    headers: { Accept: "application/json" },
   });
 
   const contentType = res.headers.get("content-type") || "";
@@ -92,9 +79,7 @@ async function fetchJson<T>(url: string): Promise<T> {
       contentType,
       bodyPreview: text.slice(0, 600),
     });
-    throw new Error(
-      `Expected JSON but got ${contentType || "unknown type"} for ${url}`,
-    );
+    throw new Error(`Expected JSON but got ${contentType || "unknown type"} for ${url}`);
   }
 
   try {
@@ -109,7 +94,7 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 }
 
-// Cache dropdown lookups so they don’t “pop in” late every single visit.
+// Cache dropdown lookups
 const DROPDOWN_STALE_TIME_MS = 1000 * 60 * 60 * 24; // 24 hours
 const DROPDOWN_CACHE_TIME_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
@@ -121,19 +106,18 @@ export default function Dashboard() {
   const [context, setContext] = useState("");
   const [tone, setTone] = useState<Tone | "">("");
   const [intensity, setIntensity] = useState<number[]>([3]);
+
   const [justification, setJustification] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [meta, setMeta] = useState<any>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // API base:
-  // - Local dev: "" (so calls are /routes/... and your Vite proxy can forward)
-  // - Prod: "/proxy" (so calls are same-origin and hit your Cloudflare Worker route)
+  // - Local dev: "" (calls /routes/... and Vite proxy can forward)
+  // - Prod: "/proxy" (same-origin -> Cloudflare Worker)
   const apiBase = useMemo(() => {
     const host = window.location.hostname;
-    const isLocal =
-      host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-    const prodProxyPrefix = "/proxy";
-    return isLocal ? "" : prodProxyPrefix;
+    const isLocal = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+    return isLocal ? "" : "/proxy";
   }, []);
 
   const topicsUrl = useMemo(
@@ -146,7 +130,7 @@ export default function Dashboard() {
     [apiBase],
   );
 
-  // Option A: use the GET endpoint that actually works in the Databutton app
+  // Option A: GET endpoint that works in Databutton-hosted app
   const jaasUrl = useMemo(
     () => `${stripTrailingSlash(apiBase)}/routes/jaas`,
     [apiBase],
@@ -154,15 +138,11 @@ export default function Dashboard() {
 
   // Modern ITSM: State loss logic
   useEffect(() => {
-    if (experience === "modern" && topic) {
-      setTone("");
-    }
+    if (experience === "modern" && topic) setTone("");
   }, [topic, experience]);
 
   useEffect(() => {
-    if (experience === "modern") {
-      setContext("");
-    }
+    if (experience === "modern") setContext("");
   }, [intensity, experience]);
 
   const {
@@ -200,22 +180,35 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
-    if (topicsIsError && topicsError) {
-      console.error("[Dashboard] Topics load failed:", topicsError);
-    }
+    if (topicsIsError && topicsError) console.error("[Dashboard] Topics load failed:", topicsError);
   }, [topicsIsError, topicsError]);
 
   useEffect(() => {
-    if (tonesIsError && tonesError) {
-      console.error("[Dashboard] Tones load failed:", tonesError);
-    }
+    if (tonesIsError && tonesError) console.error("[Dashboard] Tones load failed:", tonesError);
   }, [tonesIsError, tonesError]);
 
+  const topics = topicsData?.topics ?? [];
+  const tones = tonesData?.tones ?? [];
+
+  // IMPORTANT: Never blank the page. Only show loading inside the card.
+  const lookupsReady = !topicsLoading && !tonesLoading;
+  const lookupsFailed = topicsIsError || tonesIsError;
+  const lookupsWorking = topicsFetching || tonesFetching;
+
+  const canGenerate =
+    lookupsReady &&
+    !lookupsFailed &&
+    !!topic &&
+    (experience === "modern" ? true : true); // keep simple; your UX rules can be expanded
+
   const handleGenerate = async () => {
-    setIsLoading(true);
+    if (!lookupsReady) return;
+
+    setIsGenerating(true);
     setJustification(null);
     setMeta(null);
 
+    // Keep your deliberate “processing feel”
     if (experience === "modern") {
       await new Promise((resolve) => setTimeout(resolve, 300));
     } else if (experience === "legacy") {
@@ -223,74 +216,281 @@ export default function Dashboard() {
     }
 
     try {
-      // Build query params for the GET endpoint
       const params = new URLSearchParams();
       if (topic) params.set("topic", topic);
       if (context) params.set("context", context);
       if (tone) params.set("tone", tone);
       params.set("intensity", String(intensity[0]));
-      params.set("format", "json"); // matches your working Databutton call
+      params.set("format", "json");
 
       const url = `${jaasUrl}?${params.toString()}`;
       const data = await fetchJson<JustificationResponse>(url);
 
-      setJustification(data.justification ?? "");
+      setJustification((data.justification ?? "").trim());
       setMeta(data);
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        "Failed to generate justification. The system might be down for maintenance (indefinitely).",
-      );
+
+      if (!data.justification) {
+        toast.message("Request succeeded, but no justification field was returned.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to generate justification.");
     } finally {
-      setIsLoading(false);
+      setIsGenerating(false);
     }
   };
 
-  const copyToClipboard = () => {
-    if (justification) {
-      navigator.clipboard.writeText(justification);
+  const copyToClipboard = async () => {
+    if (!justification) return;
+    try {
+      await navigator.clipboard.writeText(justification);
       toast.success("Copied to clipboard");
+    } catch (e) {
+      toast.error("Copy failed (browser blocked clipboard).");
     }
   };
-
-  const LegacyStatus = [
-    "PENDING_SYNC",
-    "AWAITING_BACKEND",
-    "STATE_UNKNOWN",
-    "REC_MODIFIED",
-  ];
-
-  const topics = topicsData?.topics ?? [];
-  const tones = tonesData?.tones ?? [];
-
-  const lookupsReady = !topicsLoading && !tonesLoading;
-  const lookupsFailed = topicsIsError || tonesIsError;
 
   return (
     <EnterpriseLayout>
-      {/* rest of your component unchanged */}
       <TooltipProvider>
-        {/* ... */}
+        <div className="mx-auto w-full max-w-5xl p-4 md:p-8">
+          <div className="mb-6 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl font-semibold">
+                {getCopy("dashboard.title", experience) ?? "Justification Generator"}
+              </h1>
+
+              <div className="flex items-center gap-2">
+                {lookupsWorking ? (
+                  <Badge variant="secondary" className="gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading
+                  </Badge>
+                ) : lookupsFailed ? (
+                  <Badge variant="destructive" className="gap-2">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    API Error
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="gap-2">
+                    <Info className="h-3.5 w-3.5" />
+                    Ready
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            <p className="text-sm text-muted-foreground">
+              {getCopy("dashboard.subtitle", experience) ??
+                "Generate consistent, auditable justifications based on topic, tone, and intensity."}
+            </p>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Inputs</CardTitle>
+              <CardDescription>
+                Pick a topic and tune the output. In Modern mode, tone/context may be restricted by design.
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              {/* Topic */}
+              <div className="space-y-2">
+                <Label>Topic</Label>
+                <Select
+                  value={topic || ""}
+                  onValueChange={(v) => setTopic(v as Topic)}
+                  disabled={!lookupsReady || lookupsFailed}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={lookupsReady ? "Select a topic" : "Loading topics..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {topics.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tone */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Tone</Label>
+                  {experience === "modern" ? (
+                    <Badge variant="secondary">Auto</Badge>
+                  ) : null}
+                </div>
+
+                <Select
+                  value={tone || ""}
+                  onValueChange={(v) => setTone(v as Tone)}
+                  disabled={!lookupsReady || lookupsFailed || experience === "modern"}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={experience === "modern" ? "Auto-selected" : "Select a tone"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tones.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Context */}
+              <div className="space-y-2 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <Label>Context</Label>
+                  {experience === "modern" ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="secondary" className="cursor-default">
+                          Locked
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Modern mode intentionally ignores free-form context.
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                </div>
+
+                <Input
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                  placeholder="Optional: a short sentence with relevant details"
+                  disabled={experience === "modern"}
+                />
+              </div>
+
+              {/* Intensity */}
+              <div className="space-y-2 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <Label>Intensity</Label>
+                  <Badge variant="secondary">{intensity[0]}</Badge>
+                </div>
+
+                <Slider
+                  value={intensity}
+                  onValueChange={setIntensity}
+                  min={1}
+                  max={5}
+                  step={1}
+                />
+              </div>
+
+              {/* Error panel if lookups fail */}
+              {lookupsFailed ? (
+                <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
+                  <div className="mb-2 flex items-center gap-2 font-medium text-destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    Failed to load configuration
+                  </div>
+                  <div className="text-muted-foreground">
+                    Topics or tones could not be loaded. Retry the lookups.
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Button variant="outline" onClick={() => refetchTopics()}>
+                      Retry Topics
+                    </Button>
+                    <Button variant="outline" onClick={() => refetchTones()}>
+                      Retry Tones
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+
+            <CardFooter className="flex flex-col items-stretch gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-xs text-muted-foreground">
+                Endpoint: <span className="font-mono">{jaasUrl}</span>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={!canGenerate || isGenerating}
+                  className="min-w-[160px]"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating
+                    </>
+                  ) : (
+                    "Generate"
+                  )}
+                </Button>
+
+                <Button variant="outline" onClick={() => navigate("/tickets")}>
+                  Tickets
+                </Button>
+              </div>
+            </CardFooter>
+          </Card>
+
+          {/* Output */}
+          <div className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  Output
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={copyToClipboard}
+                    disabled={!justification}
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    Copy
+                  </Button>
+                </CardTitle>
+                <CardDescription>
+                  Generated justification text and metadata.
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent>
+                {!justification && !isGenerating ? (
+                  <div className="text-sm text-muted-foreground">
+                    Nothing generated yet.
+                  </div>
+                ) : null}
+
+                {isGenerating ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Working…
+                  </div>
+                ) : null}
+
+                {justification ? (
+                  <div className="mt-3 whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-sm leading-6">
+                    {justification}
+                  </div>
+                ) : null}
+
+                {meta ? (
+                  <div className="mt-4">
+                    <div className="mb-2 text-xs font-medium text-muted-foreground">
+                      Metadata
+                    </div>
+                    <pre className="max-h-64 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
+                      {JSON.stringify(meta, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </TooltipProvider>
     </EnterpriseLayout>
-  );
-}
-
-function Activity(props: any) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-    </svg>
   );
 }
