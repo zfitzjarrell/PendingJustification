@@ -1,15 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
-
-import { EnterpriseLayout } from "@/components/EnterpriseLayout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -17,7 +9,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { EnterpriseLayout } from "@/components/EnterpriseLayout";
+import { toast } from "sonner";
+import {
+  Loader2,
+  Copy,
+  AlertCircle,
+  Clock,
+  CheckCircle2,
+  Info,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -25,12 +38,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-import { Loader2, Copy, AlertCircle, Info } from "lucide-react";
-
-// Import Types (keep as-is from your project)
+// Import Types
 import { Topic, Tone } from "types";
 
-// Import Experience Engine (keep as-is)
+// Import Experience Engine
 import { useExperience } from "utils/experience-context";
 import { getCopy } from "utils/copy-engine";
 
@@ -68,7 +79,7 @@ async function fetchJson<T>(url: string): Promise<T> {
       url,
       status: res.status,
       contentType,
-      bodyPreview: text.slice(0, 400),
+      bodyPreview: text.slice(0, 800),
     });
     throw new Error(`Request failed (${res.status}) for ${url}`);
   }
@@ -77,9 +88,11 @@ async function fetchJson<T>(url: string): Promise<T> {
     console.error("[Dashboard] Expected JSON but got:", {
       url,
       contentType,
-      bodyPreview: text.slice(0, 600),
+      bodyPreview: text.slice(0, 1200),
     });
-    throw new Error(`Expected JSON but got ${contentType || "unknown type"} for ${url}`);
+    throw new Error(
+      `Expected JSON but got ${contentType || "unknown type"} for ${url}`,
+    );
   }
 
   try {
@@ -87,14 +100,14 @@ async function fetchJson<T>(url: string): Promise<T> {
   } catch (e) {
     console.error("[Dashboard] JSON parse error", {
       url,
-      bodyPreview: text.slice(0, 600),
+      bodyPreview: text.slice(0, 1200),
       error: e,
     });
     throw new Error(`Failed to parse JSON for ${url}`);
   }
 }
 
-// Cache dropdown lookups
+// Cache dropdown lookups so they don’t “pop in” late every single visit.
 const DROPDOWN_STALE_TIME_MS = 1000 * 60 * 60 * 24; // 24 hours
 const DROPDOWN_CACHE_TIME_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
@@ -106,17 +119,29 @@ export default function Dashboard() {
   const [context, setContext] = useState("");
   const [tone, setTone] = useState<Tone | "">("");
   const [intensity, setIntensity] = useState<number[]>([3]);
-
   const [justification, setJustification] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [meta, setMeta] = useState<any>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Safe copy wrapper: NEVER crash the render tree because a copy key is missing.
+  const t = (key: string, fallback?: string) => {
+    try {
+      const val = getCopy(experience as any, key);
+      if (typeof val === "string" && val.trim().length > 0) return val;
+      return fallback ?? key;
+    } catch (e) {
+      console.warn("[Dashboard] getCopy failed:", { experience, key, error: e });
+      return fallback ?? key;
+    }
+  };
 
   // API base:
-  // - Local dev: "" (calls /routes/... and Vite proxy can forward)
-  // - Prod: "/proxy" (same-origin -> Cloudflare Worker)
+  // - Local dev: "" (so calls are /routes/... and your Vite proxy can forward)
+  // - Prod: "/proxy" (so calls are same-origin and hit your Cloudflare Worker route)
   const apiBase = useMemo(() => {
     const host = window.location.hostname;
-    const isLocal = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+    const isLocal =
+      host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
     return isLocal ? "" : "/proxy";
   }, []);
 
@@ -130,7 +155,7 @@ export default function Dashboard() {
     [apiBase],
   );
 
-  // Option A: GET endpoint that works in Databutton-hosted app
+  // Use the GET endpoint that mirrors the Databutton-hosted app call
   const jaasUrl = useMemo(
     () => `${stripTrailingSlash(apiBase)}/routes/jaas`,
     [apiBase],
@@ -180,35 +205,28 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
-    if (topicsIsError && topicsError) console.error("[Dashboard] Topics load failed:", topicsError);
+    if (topicsIsError && topicsError) {
+      console.error("[Dashboard] Topics load failed:", topicsError);
+    }
   }, [topicsIsError, topicsError]);
 
   useEffect(() => {
-    if (tonesIsError && tonesError) console.error("[Dashboard] Tones load failed:", tonesError);
+    if (tonesIsError && tonesError) {
+      console.error("[Dashboard] Tones load failed:", tonesError);
+    }
   }, [tonesIsError, tonesError]);
 
   const topics = topicsData?.topics ?? [];
   const tones = tonesData?.tones ?? [];
 
-  // IMPORTANT: Never blank the page. Only show loading inside the card.
   const lookupsReady = !topicsLoading && !tonesLoading;
   const lookupsFailed = topicsIsError || tonesIsError;
-  const lookupsWorking = topicsFetching || tonesFetching;
-
-  const canGenerate =
-    lookupsReady &&
-    !lookupsFailed &&
-    !!topic &&
-    (experience === "modern" ? true : true); // keep simple; your UX rules can be expanded
 
   const handleGenerate = async () => {
-    if (!lookupsReady) return;
-
-    setIsGenerating(true);
+    setIsLoading(true);
     setJustification(null);
     setMeta(null);
 
-    // Keep your deliberate “processing feel”
     if (experience === "modern") {
       await new Promise((resolve) => setTimeout(resolve, 300));
     } else if (experience === "legacy") {
@@ -226,271 +244,508 @@ export default function Dashboard() {
       const url = `${jaasUrl}?${params.toString()}`;
       const data = await fetchJson<JustificationResponse>(url);
 
-      setJustification((data.justification ?? "").trim());
+      setJustification(data.justification ?? "");
       setMeta(data);
-
-      if (!data.justification) {
-        toast.message("Request succeeded, but no justification field was returned.");
-      }
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to generate justification.");
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        "Failed to generate justification. The system might be down for maintenance (indefinitely).",
+      );
     } finally {
-      setIsGenerating(false);
+      setIsLoading(false);
     }
   };
 
-  const copyToClipboard = async () => {
-    if (!justification) return;
-    try {
-      await navigator.clipboard.writeText(justification);
+  const copyToClipboard = () => {
+    if (justification) {
+      navigator.clipboard.writeText(justification);
       toast.success("Copied to clipboard");
-    } catch (e) {
-      toast.error("Copy failed (browser blocked clipboard).");
     }
   };
+
+  const LegacyStatus = [
+    "PENDING_SYNC",
+    "AWAITING_BACKEND",
+    "STATE_UNKNOWN",
+    "REC_MODIFIED",
+  ];
 
   return (
     <EnterpriseLayout>
       <TooltipProvider>
-        <div className="mx-auto w-full max-w-5xl p-4 md:p-8">
-          <div className="mb-6 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-semibold">
-                {getCopy("dashboard.title", experience) ?? "Justification Generator"}
-              </h1>
-
-              <div className="flex items-center gap-2">
-                {lookupsWorking ? (
-                  <Badge variant="secondary" className="gap-2">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading
-                  </Badge>
-                ) : lookupsFailed ? (
-                  <Badge variant="destructive" className="gap-2">
-                    <AlertCircle className="h-3.5 w-3.5" />
-                    API Error
-                  </Badge>
-                ) : (
-                  <Badge variant="secondary" className="gap-2">
-                    <Info className="h-3.5 w-3.5" />
-                    Ready
-                  </Badge>
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-6">
+          <Card className="card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                {t("pending_label", "Pending")}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("pending_label", "Pending")}</TooltipContent>
+                  </Tooltip>
                 )}
-              </div>
-            </div>
-
-            <p className="text-sm text-muted-foreground">
-              {getCopy("dashboard.subtitle", experience) ??
-                "Generate consistent, auditable justifications based on topic, tone, and intensity."}
-            </p>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Inputs</CardTitle>
-              <CardDescription>
-                Pick a topic and tune the output. In Modern mode, tone/context may be restricted by design.
-              </CardDescription>
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground ml-1" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("tooltip_text", "Info")}</TooltipContent>
+                  </Tooltip>
+                )}
+              </CardTitle>
+              <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
-
-            <CardContent className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              {/* Topic */}
-              <div className="space-y-2">
-                <Label>Topic</Label>
-                <Select
-                  value={topic || ""}
-                  onValueChange={(v) => setTopic(v as Topic)}
-                  disabled={!lookupsReady || lookupsFailed}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={lookupsReady ? "Select a topic" : "Loading topics..."} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {topics.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Tone */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Tone</Label>
-                  {experience === "modern" ? (
-                    <Badge variant="secondary">Auto</Badge>
-                  ) : null}
-                </div>
-
-                <Select
-                  value={tone || ""}
-                  onValueChange={(v) => setTone(v as Tone)}
-                  disabled={!lookupsReady || lookupsFailed || experience === "modern"}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={experience === "modern" ? "Auto-selected" : "Select a tone"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tones.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Context */}
-              <div className="space-y-2 md:col-span-2">
-                <div className="flex items-center justify-between">
-                  <Label>Context</Label>
-                  {experience === "modern" ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Badge variant="secondary" className="cursor-default">
-                          Locked
-                        </Badge>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        Modern mode intentionally ignores free-form context.
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : null}
-                </div>
-
-                <Input
-                  value={context}
-                  onChange={(e) => setContext(e.target.value)}
-                  placeholder="Optional: a short sentence with relevant details"
-                  disabled={experience === "modern"}
-                />
-              </div>
-
-              {/* Intensity */}
-              <div className="space-y-2 md:col-span-2">
-                <div className="flex items-center justify-between">
-                  <Label>Intensity</Label>
-                  <Badge variant="secondary">{intensity[0]}</Badge>
-                </div>
-
-                <Slider
-                  value={intensity}
-                  onValueChange={setIntensity}
-                  min={1}
-                  max={5}
-                  step={1}
-                />
-              </div>
-
-              {/* Error panel if lookups fail */}
-              {lookupsFailed ? (
-                <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
-                  <div className="mb-2 flex items-center gap-2 font-medium text-destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    Failed to load configuration
-                  </div>
-                  <div className="text-muted-foreground">
-                    Topics or tones could not be loaded. Retry the lookups.
-                  </div>
-                  <div className="mt-3 flex gap-2">
-                    <Button variant="outline" onClick={() => refetchTopics()}>
-                      Retry Topics
-                    </Button>
-                    <Button variant="outline" onClick={() => refetchTones()}>
-                      Retry Tones
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
+            <CardContent>
+              <div className="text-2xl font-bold">4,892</div>
+              <p className="text-xs text-muted-foreground">+12% from last month</p>
             </CardContent>
-
-            <CardFooter className="flex flex-col items-stretch gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="text-xs text-muted-foreground">
-                Endpoint: <span className="font-mono">{jaasUrl}</span>
-              </div>
-
-              <div className="flex gap-2">
-                <Button
-                  onClick={handleGenerate}
-                  disabled={!canGenerate || isGenerating}
-                  className="min-w-[160px]"
-                >
-                  {isGenerating ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Generating
-                    </>
-                  ) : (
-                    "Generate"
-                  )}
-                </Button>
-
-                <Button variant="outline" onClick={() => navigate("/tickets")}>
-                  Tickets
-                </Button>
-              </div>
-            </CardFooter>
           </Card>
 
-          {/* Output */}
-          <div className="mt-6">
-            <Card>
+          <Card className="card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                {t("wait_time_label", "Wait time")}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("wait_time_label", "Wait time")}</TooltipContent>
+                  </Tooltip>
+                )}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground ml-1" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("tooltip_text", "Info")}</TooltipContent>
+                  </Tooltip>
+                )}
+              </CardTitle>
+              <AlertCircle className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">183 Days</div>
+              <p className="text-xs text-muted-foreground">Within acceptable limits</p>
+            </CardContent>
+          </Card>
+
+          <Card
+            className="card cursor-pointer hover:bg-slate-50 transition-colors dark:hover:bg-slate-900"
+            onClick={() => navigate("/tickets/approved")}
+          >
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                {t("approved_label", "Approved")}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("approved_label", "Approved")}</TooltipContent>
+                  </Tooltip>
+                )}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground ml-1" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("tooltip_text", "Info")}</TooltipContent>
+                  </Tooltip>
+                )}
+              </CardTitle>
+              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">0</div>
+              <p className="text-xs text-muted-foreground">Target met</p>
+            </CardContent>
+          </Card>
+
+          <Card className="card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                {t("uptime_label", "Uptime")}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("uptime_label", "Uptime")}</TooltipContent>
+                  </Tooltip>
+                )}
+                {experience === "modern" && (
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <Info className="h-3 w-3 text-muted-foreground ml-1" />
+                    </TooltipTrigger>
+                    <TooltipContent>{t("tooltip_text", "Info")}</TooltipContent>
+                  </Tooltip>
+                )}
+              </CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">99.999%</div>
+              <p className="text-xs text-muted-foreground">No incidents reported</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 md:grid-cols-7">
+          <div className="md:col-span-4 space-y-6">
+            <Card className="card border-t-4 border-t-blue-600 shadow-sm">
               <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  Output
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={copyToClipboard}
-                    disabled={!justification}
-                  >
-                    <Copy className="mr-2 h-4 w-4" />
-                    Copy
-                  </Button>
-                </CardTitle>
+                <CardTitle>Justification Generator</CardTitle>
                 <CardDescription>
-                  Generated justification text and metadata.
+                  Select your parameters to generate a compliant excuse for your delay or request.
                 </CardDescription>
               </CardHeader>
 
-              <CardContent>
-                {!justification && !isGenerating ? (
-                  <div className="text-sm text-muted-foreground">
-                    Nothing generated yet.
-                  </div>
-                ) : null}
-
-                {isGenerating ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Working…
-                  </div>
-                ) : null}
-
-                {justification ? (
-                  <div className="mt-3 whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-sm leading-6">
-                    {justification}
-                  </div>
-                ) : null}
-
-                {meta ? (
-                  <div className="mt-4">
-                    <div className="mb-2 text-xs font-medium text-muted-foreground">
-                      Metadata
+              <CardContent className="space-y-6">
+                {!lookupsReady && !lookupsFailed && (
+                  <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Loading dropdowns…</span>
+                      <span className="text-muted-foreground">
+                        {topicsFetching || tonesFetching ? "(syncing)" : ""}
+                      </span>
                     </div>
-                    <pre className="max-h-64 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
-                      {JSON.stringify(meta, null, 2)}
-                    </pre>
                   </div>
-                ) : null}
+                )}
+
+                {lookupsFailed && (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                    <div className="font-semibold">Lookup data failed to load</div>
+                    <div className="mt-1">
+                      Open DevTools Console to see the response body preview.
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-8"
+                        onClick={() => {
+                          refetchTopics();
+                          refetchTones();
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="topic" className="flex items-center gap-2">
+                      {t("topic_label", "Topic")}
+                      {experience === "modern" && (
+                        <Info className="h-3 w-3 text-muted-foreground" />
+                      )}
+                    </Label>
+
+                    <Select
+                      value={topic}
+                      onValueChange={(val) => setTopic(val as Topic)}
+                      disabled={!lookupsReady || lookupsFailed}
+                    >
+                      <SelectTrigger id="topic">
+                        <SelectValue
+                          placeholder={
+                            topicsLoading ? "Loading topics..." : "Select a topic..."
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="generic">Generic / Any</SelectItem>
+                        {topics.map((tt: string) => (
+                          <SelectItem key={tt} value={tt}>
+                            {tt.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())}
+                          </SelectItem>
+                        ))}
+                        {!topicsLoading && topics.length === 0 && !topicsIsError && (
+                          <div className="px-3 py-2 text-xs text-muted-foreground">
+                            No topics returned
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="tone" className="flex items-center gap-2">
+                      {t("tone_label", "Tone")}
+                      {experience === "modern" && (
+                        <Info className="h-3 w-3 text-muted-foreground" />
+                      )}
+                    </Label>
+
+                    <Select
+                      value={tone}
+                      onValueChange={(val) => setTone(val as Tone)}
+                      disabled={!lookupsReady || lookupsFailed}
+                    >
+                      <SelectTrigger id="tone">
+                        <SelectValue
+                          placeholder={tonesLoading ? "Loading tones..." : "Select a tone..."}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tones.map((tt: string) => (
+                          <SelectItem key={tt} value={tt}>
+                            {tt.replace("-", " ").replace(/\b\w/g, (l) => l.toUpperCase())}
+                          </SelectItem>
+                        ))}
+                        {!tonesLoading && tones.length === 0 && !tonesIsError && (
+                          <div className="px-3 py-2 text-xs text-muted-foreground">
+                            No tones returned
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="context" className="flex items-center gap-2">
+                    Context (Optional)
+                    {experience === "modern" && (
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    )}
+                  </Label>
+                  <Input
+                    id="context"
+                    placeholder={t("context_placeholder", "Add optional context…")}
+                    value={context}
+                    onChange={(e) =>
+                      setContext(
+                        experience === "legacy"
+                          ? e.target.value.toUpperCase()
+                          : e.target.value,
+                      )
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {experience === "amateur"
+                      ? "Please provide additional details if applicable. If unsure, leave blank."
+                      : "Provide specific details to personalize the rejection."}
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between">
+                    <Label className="flex items-center gap-2">
+                      Intensity Level: {intensity[0]}
+                      {experience === "modern" && (
+                        <Info className="h-3 w-3 text-muted-foreground" />
+                      )}
+                    </Label>
+                    <span className="text-xs text-muted-foreground">
+                      {intensity[0] === 1
+                        ? "Polite"
+                        : intensity[0] === 5
+                          ? "Career Limiting"
+                          : "Standard"}
+                    </span>
+                  </div>
+
+                  <Slider
+                    value={intensity}
+                    onValueChange={setIntensity}
+                    min={1}
+                    max={5}
+                    step={1}
+                    className="w-full"
+                  />
+                </div>
+              </CardContent>
+
+              <CardFooter className="gap-2">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={isLoading}
+                  className="w-full bg-blue-700 hover:bg-blue-800 btn"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    t("generate_btn", "Generate")
+                  )}
+                </Button>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="w-full">
+                      <Button
+                        variant="outline"
+                        disabled={experience !== "classic"}
+                        className={`w-full btn ${
+                          experience === "legacy" || experience === "modern"
+                            ? "opacity-50 cursor-not-allowed"
+                            : ""
+                        } ${
+                          experience === "classic"
+                            ? "text-primary border-primary bg-background hover:bg-slate-100"
+                            : ""
+                        }`}
+                      >
+                        {t("secondary_action", "Secondary")}
+                      </Button>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("secondary_tooltip", "Not available")}</TooltipContent>
+                </Tooltip>
+              </CardFooter>
+            </Card>
+
+            {justification && (
+              <Card className="card bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-800 animate-in fade-in slide-in-from-bottom-4">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Generated Response</CardTitle>
+                    <div className="flex gap-2">
+                      {meta?.topic && <Badge variant="outline">{meta.topic}</Badge>}
+                      {meta?.tone && <Badge variant="secondary">{meta.tone}</Badge>}
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent>
+                  <div className="p-4 bg-white dark:bg-black rounded-md border shadow-inner">
+                    <p className="text-lg font-medium leading-relaxed font-serif text-slate-800 dark:text-slate-200">
+                      "{justification}"
+                    </p>
+                  </div>
+
+                  {meta && (
+                    <div className="mt-4 text-xs text-muted-foreground flex gap-4">
+                      <span>
+                        ID: <span className="font-mono">{meta.meta?.id}</span>
+                      </span>
+                      <span>Source: {meta.meta?.source}</span>
+                    </div>
+                  )}
+                </CardContent>
+
+                <CardFooter>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={copyToClipboard}
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    Copy to Clipboard
+                  </Button>
+                </CardFooter>
+              </Card>
+            )}
+          </div>
+
+          <div className="md:col-span-3 space-y-6">
+            <Card className="card">
+              <CardHeader>
+                <CardTitle className="text-base">Recent Activities</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-3 text-sm pb-3 border-b last:border-0 last:pb-0"
+                    >
+                      <div className="h-2 w-2 mt-1.5 rounded-full bg-yellow-500 shrink-0" />
+                      <div>
+                        <p className="font-medium text-slate-700 dark:text-slate-300">
+                          Ticket #{10234 + i} Update
+                        </p>
+                        <p className="text-slate-500 text-xs">
+                          {experience === "legacy"
+                            ? LegacyStatus[i % LegacyStatus.length]
+                            : t("ticket_update", "Ticket updated")}
+                        </p>
+                        <p className="text-slate-400 text-[10px] mt-1">
+                          {i * 12} mins ago
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="card">
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {t("blocker_title", "Top blockers")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span>Alignment Issues</span>
+                      <span>84%</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-red-500 w-[84%]" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span>Budget Constraints</span>
+                      <span>12%</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-orange-500 w-[12%]" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span>Mercury Retrograde</span>
+                      <span>4%</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 w-[4%]" />
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
         </div>
+
+        <div className="mt-8 text-center text-[10px] text-muted-foreground font-mono">
+          {t("footer_note", "pendingjustification.com")}
+        </div>
       </TooltipProvider>
     </EnterpriseLayout>
+  );
+}
+
+function Activity(props: any) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
   );
 }
