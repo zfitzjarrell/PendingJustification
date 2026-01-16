@@ -118,7 +118,7 @@ export default function Dashboard() {
       host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
 
     // Keep this aligned with your Netlify redirect / Worker pathing
-    const prodProxyPrefix = "/_proxy";
+    const prodProxyPrefix = "/proxy";
     return isLocal ? "" : prodProxyPrefix;
   }, []);
 
