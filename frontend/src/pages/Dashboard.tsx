@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo } from "react";
-import brain from "brain";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -22,7 +21,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { EnterpriseLayout } from "@/components/EnterpriseLayout";
 import { toast } from "sonner";
-import { Loader2, Copy, AlertCircle, Clock, CheckCircle2, Info } from "lucide-react";
+import {
+  Loader2,
+  Copy,
+  AlertCircle,
+  Clock,
+  CheckCircle2,
+  Info,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import {
@@ -42,6 +48,18 @@ import { getCopy } from "utils/copy-engine";
 type TopicsResponse = { topics: string[] };
 type TonesResponse = { tones: string[] };
 
+type JustificationResponse = {
+  justification?: string;
+  topic?: string;
+  tone?: string;
+  meta?: {
+    id?: string;
+    source?: string;
+    [k: string]: any;
+  };
+  [k: string]: any;
+};
+
 function stripTrailingSlash(url: string) {
   return url.replace(/\/+$/, "");
 }
@@ -56,8 +74,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   });
 
   const contentType = res.headers.get("content-type") || "";
-
-  // Read text first so we can show useful debug if it isn't JSON
   const text = await res.text();
 
   if (!res.ok) {
@@ -70,7 +86,6 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(`Request failed (${res.status}) for ${url}`);
   }
 
-  // Guard against the "text/html" 200 OK case
   if (!contentType.includes("application/json")) {
     console.error("[Dashboard] Expected JSON but got:", {
       url,
@@ -94,6 +109,54 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 }
 
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+
+  if (!res.ok) {
+    console.error("[Dashboard] Non-OK response", {
+      url,
+      status: res.status,
+      contentType,
+      bodyPreview: text.slice(0, 800),
+    });
+    throw new Error(`Request failed (${res.status}) for ${url}`);
+  }
+
+  if (!contentType.includes("application/json")) {
+    console.error("[Dashboard] Expected JSON but got:", {
+      url,
+      contentType,
+      bodyPreview: text.slice(0, 1200),
+    });
+    throw new Error(
+      `Expected JSON but got ${contentType || "unknown type"} for ${url}`,
+    );
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    console.error("[Dashboard] JSON parse error", {
+      url,
+      bodyPreview: text.slice(0, 1200),
+      error: e,
+    });
+    throw new Error(`Failed to parse JSON for ${url}`);
+  }
+}
+
+// Cache dropdown lookups so they don’t “pop in” late every single visit.
 const DROPDOWN_STALE_TIME_MS = 1000 * 60 * 60 * 24; // 24 hours
 const DROPDOWN_CACHE_TIME_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
@@ -109,15 +172,13 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [meta, setMeta] = useState<any>(null);
 
-  // Decide how we call the API:
-  // - Local dev: call "/routes/..." so Vite's dev proxy can forward to localhost:8000
-  // - Prod: call a SAME-ORIGIN proxy path (no CORS): "/_proxy/routes/..."
+  // API base:
+  // - Local dev: "" (so calls are /routes/... and your Vite proxy can forward)
+  // - Prod: "/proxy" (so calls are same-origin and hit your Cloudflare Worker route)
   const apiBase = useMemo(() => {
     const host = window.location.hostname;
     const isLocal =
       host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-
-    // Keep this aligned with your Netlify redirect / Worker pathing
     const prodProxyPrefix = "/proxy";
     return isLocal ? "" : prodProxyPrefix;
   }, []);
@@ -132,22 +193,24 @@ export default function Dashboard() {
     [apiBase],
   );
 
+  const justificationUrl = useMemo(
+    () => `${stripTrailingSlash(apiBase)}/routes/jaas/justification`,
+    [apiBase],
+  );
+
   // Modern ITSM: State loss logic
   useEffect(() => {
     if (experience === "modern" && topic) {
-      // Quietly reset tone when category changes
       setTone("");
     }
   }, [topic, experience]);
 
   useEffect(() => {
     if (experience === "modern") {
-      // Quietly reset context when intensity changes
       setContext("");
     }
   }, [intensity, experience]);
 
-  // Fetch available topics and tones (SAME-ORIGIN)
   const {
     data: topicsData,
     isLoading: topicsLoading,
@@ -199,7 +262,6 @@ export default function Dashboard() {
     setJustification(null);
     setMeta(null);
 
-    // Delays
     if (experience === "modern") {
       await new Promise((resolve) => setTimeout(resolve, 300));
     } else if (experience === "legacy") {
@@ -207,16 +269,20 @@ export default function Dashboard() {
     }
 
     try {
-      const response = await brain.get_justification({
+      // IMPORTANT:
+      // Use the same-origin proxy for the POST too.
+      // This avoids brain-client base URL drift and matches how topics/tones are loaded.
+      const payload = {
         topic: topic || undefined,
         context: context || undefined,
         tone: tone || undefined,
         intensity: intensity[0],
-        format: Format.Json, // Explicitly ask for JSON
-      });
+        format: Format.Json,
+      };
 
-      const data = await response.json();
-      setJustification(data.justification);
+      const data = await postJson<JustificationResponse>(justificationUrl, payload);
+
+      setJustification(data.justification ?? "");
       setMeta(data);
     } catch (error) {
       console.error(error);
@@ -235,13 +301,16 @@ export default function Dashboard() {
     }
   };
 
-  const LegacyStatus = ["PENDING_SYNC", "AWAITING_BACKEND", "STATE_UNKNOWN", "REC_MODIFIED"];
+  const LegacyStatus = [
+    "PENDING_SYNC",
+    "AWAITING_BACKEND",
+    "STATE_UNKNOWN",
+    "REC_MODIFIED",
+  ];
 
   const topics = topicsData?.topics ?? [];
   const tones = tonesData?.tones ?? [];
 
-  // If you want to hide “empty dropdown then later filled” on first paint,
-  // you can disable selects until both lookups are in.
   const lookupsReady = !topicsLoading && !tonesLoading;
   const lookupsFailed = topicsIsError || tonesIsError;
 
@@ -258,7 +327,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "pending_label")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "pending_label")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
                 {experience === "modern" && (
@@ -266,7 +337,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground ml-1" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "tooltip_text")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "tooltip_text")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
               </CardTitle>
@@ -287,7 +360,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "wait_time_label")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "wait_time_label")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
                 {experience === "modern" && (
@@ -295,7 +370,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground ml-1" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "tooltip_text")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "tooltip_text")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
               </CardTitle>
@@ -303,7 +380,9 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">183 Days</div>
-              <p className="text-xs text-muted-foreground">Within acceptable limits</p>
+              <p className="text-xs text-muted-foreground">
+                Within acceptable limits
+              </p>
             </CardContent>
           </Card>
 
@@ -319,7 +398,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "approved_label")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "approved_label")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
                 {experience === "modern" && (
@@ -327,7 +408,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground ml-1" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "tooltip_text")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "tooltip_text")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
               </CardTitle>
@@ -348,7 +431,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "uptime_label")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "uptime_label")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
                 {experience === "modern" && (
@@ -356,7 +441,9 @@ export default function Dashboard() {
                     <TooltipTrigger>
                       <Info className="h-3 w-3 text-muted-foreground ml-1" />
                     </TooltipTrigger>
-                    <TooltipContent>{getCopy(experience, "tooltip_text")}</TooltipContent>
+                    <TooltipContent>
+                      {getCopy(experience, "tooltip_text")}
+                    </TooltipContent>
                   </Tooltip>
                 )}
               </CardTitle>
@@ -364,7 +451,9 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">99.999%</div>
-              <p className="text-xs text-muted-foreground">No incidents reported</p>
+              <p className="text-xs text-muted-foreground">
+                No incidents reported
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -388,12 +477,12 @@ export default function Dashboard() {
                 )}
                 <CardTitle>Justification Generator</CardTitle>
                 <CardDescription>
-                  Select your parameters to generate a compliant excuse for your delay or request.
+                  Select your parameters to generate a compliant excuse for your
+                  delay or request.
                 </CardDescription>
               </CardHeader>
 
               <CardContent className="space-y-6">
-                {/* Lookup status bar (subtle but makes the “minute later” feel intentional) */}
                 {!lookupsReady && !lookupsFailed && (
                   <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-200">
                     <div className="flex items-center gap-2">
@@ -406,10 +495,11 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Debug / failure visibility (quiet in UI, loud in console) */}
                 {lookupsFailed && (
                   <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                    <div className="font-semibold">Lookup data failed to load</div>
+                    <div className="font-semibold">
+                      Lookup data failed to load
+                    </div>
                     <div className="mt-1">
                       Open DevTools Console to see the response body preview.
                     </div>
@@ -446,7 +536,9 @@ export default function Dashboard() {
                       <SelectTrigger id="topic">
                         <SelectValue
                           placeholder={
-                            topicsLoading ? "Loading topics..." : "Select a topic..."
+                            topicsLoading
+                              ? "Loading topics..."
+                              : "Select a topic..."
                           }
                         />
                       </SelectTrigger>
@@ -459,11 +551,13 @@ export default function Dashboard() {
                               .replace(/\b\w/g, (l) => l.toUpperCase())}
                           </SelectItem>
                         ))}
-                        {!topicsLoading && topics.length === 0 && !topicsIsError && (
-                          <div className="px-3 py-2 text-xs text-muted-foreground">
-                            No topics returned
-                          </div>
-                        )}
+                        {!topicsLoading &&
+                          topics.length === 0 &&
+                          !topicsIsError && (
+                            <div className="px-3 py-2 text-xs text-muted-foreground">
+                              No topics returned
+                            </div>
+                          )}
                       </SelectContent>
                     </Select>
                   </div>
@@ -483,20 +577,26 @@ export default function Dashboard() {
                     >
                       <SelectTrigger id="tone">
                         <SelectValue
-                          placeholder={tonesLoading ? "Loading tones..." : "Select a tone..."}
+                          placeholder={
+                            tonesLoading ? "Loading tones..." : "Select a tone..."
+                          }
                         />
                       </SelectTrigger>
                       <SelectContent>
                         {tones.map((t: string) => (
                           <SelectItem key={t} value={t}>
-                            {t.replace("-", " ").replace(/\b\w/g, (l) => l.toUpperCase())}
+                            {t
+                              .replace("-", " ")
+                              .replace(/\b\w/g, (l) => l.toUpperCase())}
                           </SelectItem>
                         ))}
-                        {!tonesLoading && tones.length === 0 && !tonesIsError && (
-                          <div className="px-3 py-2 text-xs text-muted-foreground">
-                            No tones returned
-                          </div>
-                        )}
+                        {!tonesLoading &&
+                          tones.length === 0 &&
+                          !tonesIsError && (
+                            <div className="px-3 py-2 text-xs text-muted-foreground">
+                              No tones returned
+                            </div>
+                          )}
                       </SelectContent>
                     </Select>
                   </div>
@@ -515,7 +615,9 @@ export default function Dashboard() {
                     value={context}
                     onChange={(e) =>
                       setContext(
-                        experience === "legacy" ? e.target.value.toUpperCase() : e.target.value,
+                        experience === "legacy"
+                          ? e.target.value.toUpperCase()
+                          : e.target.value,
                       )
                     }
                   />
@@ -590,7 +692,9 @@ export default function Dashboard() {
                       </Button>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent>{getCopy(experience, "secondary_tooltip")}</TooltipContent>
+                  <TooltipContent>
+                    {getCopy(experience, "secondary_tooltip")}
+                  </TooltipContent>
                 </Tooltip>
               </CardFooter>
             </Card>
@@ -625,7 +729,11 @@ export default function Dashboard() {
                 </CardContent>
 
                 <CardFooter>
-                  <Button variant="outline" className="w-full" onClick={copyToClipboard}>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={copyToClipboard}
+                  >
                     <Copy className="mr-2 h-4 w-4" />
                     Copy to Clipboard
                   </Button>
@@ -656,7 +764,9 @@ export default function Dashboard() {
                             ? LegacyStatus[i % LegacyStatus.length]
                             : getCopy(experience, "ticket_update")}
                         </p>
-                        <p className="text-slate-400 text-[10px] mt-1">{i * 12} mins ago</p>
+                        <p className="text-slate-400 text-[10px] mt-1">
+                          {i * 12} mins ago
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -666,7 +776,9 @@ export default function Dashboard() {
 
             <Card className="card">
               <CardHeader>
-                <CardTitle className="text-base">{getCopy(experience, "blocker_title")}</CardTitle>
+                <CardTitle className="text-base">
+                  {getCopy(experience, "blocker_title")}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
