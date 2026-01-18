@@ -34,12 +34,10 @@ function clampInt(n: number, min: number, max: number) {
 }
 
 export default function Api() {
-  // Same rule as Dashboard.tsx: local dev calls direct, prod calls via Worker proxy.
+  // Prod uses Worker proxy; local dev can still call "/proxy" if you have a local proxy.
   const apiBase = useMemo(() => {
-    const host = window.location.hostname;
-    const isLocal =
-      host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-    return isLocal ? "" : "/proxy";
+    // Keep it simple: always use the proxy path in this site.
+    return "/proxy";
   }, []);
 
   const [topic, setTopic] = useState("budget");
@@ -81,7 +79,6 @@ export default function Api() {
       tone: tone || "snarky",
       intensity: String(clampInt(intensity, 1, 5)),
     });
-    // Public URL people will actually use in prod:
     return `https://pendingjustification.com/proxy${endpointPath}?${params.toString()}`;
   }, [topic, tone, intensity]);
 
@@ -103,78 +100,16 @@ export default function Api() {
     const t = randomizeParams
       ? topics[Math.floor(Math.random() * topics.length)]
       : topic;
+
     const tn = randomizeParams
       ? tones[Math.floor(Math.random() * tones.length)]
       : tone;
+
     const i = randomizeParams
       ? clampInt(1 + Math.floor(Math.random() * 5), 1, 5)
       : clampInt(intensity, 1, 5);
 
     return { topic: t || "budget", tone: tn || "snarky", intensity: String(i) };
-  }
-
-  async function singleRequest() {
-    const controller = new AbortController();
-    const startedAt = nowMs();
-
-    const params = new URLSearchParams(buildParams());
-    const url = `${endpointUrl}?${params.toString()}`;
-
-    try {
-      const res = await fetch(url, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
-        credentials: "include",
-      });
-
-      const latencyMs = nowMs() - startedAt;
-      const xPjCache = res.headers.get("x-pj-cache");
-      const cfCacheStatus = res.headers.get("cf-cache-status");
-      const retryAfter = res.headers.get("retry-after");
-      const bodyText = await res.text();
-
-      setRows((prev) =>
-        [
-          {
-            id: (prev[0]?.id ?? 0) + 1,
-            startedAt,
-            latencyMs,
-            status: res.status,
-            xPjCache,
-            cfCacheStatus,
-            retryAfter,
-            error: res.ok ? undefined : bodyText.slice(0, 400),
-          },
-          ...prev,
-        ].slice(0, 100),
-      );
-
-      // Helpful to correlate UI clicks with what the edge is doing
-      // eslint-disable-next-line no-console
-      console.log("[API Test] Response", {
-        url,
-        status: res.status,
-        xPjCache,
-        cfCacheStatus,
-        retryAfter,
-        bodyPreview: bodyText.slice(0, 600),
-      });
-    } catch (e: any) {
-      const latencyMs = nowMs() - startedAt;
-      setRows((prev) =>
-        [
-          {
-            id: (prev[0]?.id ?? 0) + 1,
-            startedAt,
-            latencyMs,
-            status: "ERROR",
-            error: e?.message || String(e),
-          },
-          ...prev,
-        ].slice(0, 100),
-      );
-    }
   }
 
   function computeSummary(all: TestRow[]) {
@@ -192,11 +127,17 @@ export default function Api() {
       : 0;
 
     const p95Latency = latencies.length
-      ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))]
+      ? latencies[
+          Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))
+        ]
       : 0;
 
-    const cacheHit = all.filter((r) => (r.xPjCache || "").toUpperCase() === "HIT").length;
-    const cacheMiss = all.filter((r) => (r.xPjCache || "").toUpperCase() === "MISS").length;
+    const cacheHit = all.filter(
+      (r) => (r.xPjCache || "").toUpperCase() === "HIT",
+    ).length;
+    const cacheMiss = all.filter(
+      (r) => (r.xPjCache || "").toUpperCase() === "MISS",
+    ).length;
 
     const lastStatusCounts: Record<string, number> = {};
     for (const r of all) {
@@ -204,7 +145,70 @@ export default function Api() {
       lastStatusCounts[key] = (lastStatusCounts[key] || 0) + 1;
     }
 
-    return { total, ok, errors, avgLatency, p95Latency, cacheHit, cacheMiss, lastStatusCounts };
+    return {
+      total,
+      ok,
+      errors,
+      avgLatency,
+      p95Latency,
+      cacheHit,
+      cacheMiss,
+      lastStatusCounts,
+    };
+  }
+
+  async function singleRequest() {
+    const startedAt = nowMs();
+    const params = new URLSearchParams(buildParams());
+    const url = `${endpointUrl}?${params.toString()}`;
+
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "include",
+      });
+
+      const latencyMs = nowMs() - startedAt;
+      const xPjCache = res.headers.get("x-pj-cache");
+      const cfCacheStatus = res.headers.get("cf-cache-status");
+      const retryAfter = res.headers.get("retry-after");
+      const bodyText = await res.text();
+
+      const row: TestRow = {
+        id: (rows[0]?.id ?? 0) + 1,
+        startedAt,
+        latencyMs,
+        status: res.status,
+        xPjCache,
+        cfCacheStatus,
+        retryAfter,
+        error: res.ok ? undefined : bodyText.slice(0, 400),
+      };
+
+      setRows((prev) => [row, ...prev].slice(0, 100));
+
+      // Helpful when validating actual browser behavior
+      // eslint-disable-next-line no-console
+      console.log("[API UI Test]", {
+        url,
+        status: res.status,
+        xPjCache,
+        cfCacheStatus,
+        retryAfter,
+        bodyPreview: bodyText.slice(0, 600),
+      });
+    } catch (e: any) {
+      const latencyMs = nowMs() - startedAt;
+      const row: TestRow = {
+        id: (rows[0]?.id ?? 0) + 1,
+        startedAt,
+        latencyMs,
+        status: "ERROR",
+        error: e?.message || String(e),
+      };
+      setRows((prev) => [row, ...prev].slice(0, 100));
+    }
   }
 
   async function runLoadTest() {
@@ -233,7 +237,6 @@ export default function Api() {
     const enqueueOne = async (id: number) => {
       inFlight += 1;
       const startedAt = nowMs();
-
       const params = new URLSearchParams(buildParams());
       const url = `${endpointUrl}?${params.toString()}`;
 
@@ -245,7 +248,7 @@ export default function Api() {
           credentials: "include",
         });
 
-        // Drain body so the browser fully completes the request (important for realism)
+        // drain body for realism
         await res.text();
 
         const latencyMs = nowMs() - startedAt;
@@ -270,14 +273,11 @@ export default function Api() {
           status: "ERROR",
           error: e?.message || String(e),
         };
-
         allResults.push(row);
         setRows((prev) => [row, ...prev].slice(0, 100));
       } finally {
         inFlight -= 1;
         completed += 1;
-
-        // Update summary every completion
         const s = computeSummary(allResults);
         setSummary((prev) => ({ ...prev, ...s }));
       }
@@ -285,23 +285,19 @@ export default function Api() {
 
     const startWall = Date.now();
 
-    // Scheduler loop
     while (!controller.signal.aborted) {
       const elapsedMs = Date.now() - startWall;
       if (elapsedMs >= dur * 1000) break;
       if (issued >= totalRequests) break;
 
-      // Respect concurrency cap
       if (inFlight < conc) {
         issued += 1;
         void enqueueOne(issued);
       }
 
-      // pace issuance
       await new Promise((r) => setTimeout(r, intervalMs));
     }
 
-    // Wait for all in-flight to finish
     while (!controller.signal.aborted && completed < issued) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -323,14 +319,14 @@ export default function Api() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">API Reference</h1>
           <p className="text-muted-foreground">
-            Integrate our justification engine directly into your workflow.
+            Integrate the justification engine into your workflow.
           </p>
         </div>
 
         <Tabs defaultValue="v1" className="w-full">
           <TabsList>
             <TabsTrigger value="v1">v1.0 (Proxy)</TabsTrigger>
-            <TabsTrigger value="beta">Beta (Unstable)</TabsTrigger>
+            <TabsTrigger value="beta">Beta</TabsTrigger>
           </TabsList>
 
           <TabsContent value="v1" className="space-y-6 mt-6">
@@ -338,51 +334,34 @@ export default function Api() {
               <CardHeader>
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <CardTitle className="font-mono text-lg">GET /proxy/routes/jaas</CardTitle>
+                    <CardTitle className="font-mono text-lg">
+                      GET /proxy/routes/jaas
+                    </CardTitle>
                     <CardDescription>
-                      Generates a justification. This is the current public path that stays same-origin
-                      and benefits from Cloudflare caching.
+                      Same-origin endpoint that routes through Cloudflare Worker
+                      proxy. Supports query params: topic, tone, intensity.
                     </CardDescription>
                   </div>
                   <Badge>Public</Badge>
                 </div>
               </CardHeader>
+
               <CardContent className="space-y-6">
                 <div className="space-y-2">
-                  <h3 className="font-semibold text-sm">Query Parameters</h3>
-                  <div className="border rounded-md divide-y">
-                    <div className="grid grid-cols-4 gap-4 p-3 text-sm">
-                      <div className="font-mono font-semibold">topic</div>
-                      <div className="text-muted-foreground">string</div>
-                      <div className="text-muted-foreground">Optional</div>
-                      <div className="text-muted-foreground">Category (e.g., budget)</div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4 p-3 text-sm">
-                      <div className="font-mono font-semibold">tone</div>
-                      <div className="text-muted-foreground">string</div>
-                      <div className="text-muted-foreground">Optional</div>
-                      <div className="text-muted-foreground">Tone (e.g., snarky)</div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4 p-3 text-sm">
-                      <div className="font-mono font-semibold">intensity</div>
-                      <div className="text-muted-foreground">integer</div>
-                      <div className="text-muted-foreground">Optional</div>
-                      <div className="text-muted-foreground">Level 1-5 (e.g., 3)</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <h3 className="font-semibold text-sm">Example (PowerShell-friendly)</h3>
+                  <h3 className="font-semibold text-sm">
+                    Example (PowerShell-friendly)
+                  </h3>
                   <div className="bg-slate-950 text-slate-50 p-4 rounded-md font-mono text-sm overflow-x-auto">
                     <span className="text-purple-400">curl.exe</span>{" "}
                     <span className="text-green-400">"{exampleUrl}"</span>{" "}
                     <span className="text-blue-400">-H</span>{" "}
-                    <span className="text-green-400">"Accept: application/json"</span>
+                    <span className="text-green-400">
+                      "Accept: application/json"
+                    </span>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Note: In Windows PowerShell, plain <span className="font-mono">curl</span> is an alias for
-                    Invoke-WebRequest. Use <span className="font-mono">curl.exe</span>.
+                    In Windows PowerShell, plain curl is an alias for
+                    Invoke-WebRequest. Use curl.exe.
                   </div>
                 </div>
 
@@ -409,10 +388,11 @@ export default function Api() {
               <CardHeader>
                 <CardTitle>Interactive UI Test</CardTitle>
                 <CardDescription>
-                  This runs calls from the browser so you can validate real user behavior: caching,
-                  CORS, cookies, and in-flight overlap.
+                  Runs calls from the browser so you can validate real user
+                  behavior: caching, cookies, CORS, and in-flight overlap.
                 </CardDescription>
               </CardHeader>
+
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
@@ -441,7 +421,9 @@ export default function Api() {
                       min={1}
                       max={5}
                       value={intensity}
-                      onChange={(e) => setIntensity(clampInt(Number(e.target.value), 1, 5))}
+                      onChange={(e) =>
+                        setIntensity(clampInt(Number(e.target.value), 1, 5))
+                      }
                     />
                   </div>
                 </div>
@@ -459,22 +441,36 @@ export default function Api() {
                   <div className="p-3 text-sm">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       <div>
-                        <div className="text-xs text-muted-foreground">Last status</div>
+                        <div className="text-xs text-muted-foreground">
+                          Last status
+                        </div>
                         <div className="font-mono">{rows[0]?.status ?? "-"}</div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">Latency</div>
+                        <div className="text-xs text-muted-foreground">
+                          Latency
+                        </div>
                         <div className="font-mono">
-                          {rows[0] ? `${Math.round(rows[0].latencyMs)} ms` : "-"}
+                          {rows[0]
+                            ? `${Math.round(rows[0].latencyMs)} ms`
+                            : "-"}
                         </div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">x-pj-cache</div>
-                        <div className="font-mono">{rows[0]?.xPjCache ?? "-"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          x-pj-cache
+                        </div>
+                        <div className="font-mono">
+                          {rows[0]?.xPjCache ?? "-"}
+                        </div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">cf-cache-status</div>
-                        <div className="font-mono">{rows[0]?.cfCacheStatus ?? "-"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          cf-cache-status
+                        </div>
+                        <div className="font-mono">
+                          {rows[0]?.cfCacheStatus ?? "-"}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -488,8 +484,8 @@ export default function Api() {
                   <div>
                     <CardTitle>UI Load Test</CardTitle>
                     <CardDescription>
-                      Generates browser-driven traffic with a concurrency cap. This is the closest
-                      thing to real user load without external tooling.
+                      Generates browser-driven traffic with a concurrency cap.
+                      Randomize params forces cache misses.
                     </CardDescription>
                   </div>
                   <Badge variant={isRunning ? "default" : "secondary"}>
@@ -497,6 +493,7 @@ export default function Api() {
                   </Badge>
                 </div>
               </CardHeader>
+
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="space-y-2">
@@ -507,10 +504,163 @@ export default function Api() {
                       min={1}
                       max={3600}
                       value={durationSec}
-                      onChange={(e) => setDurationSec(clampInt(Number(e.target.value), 1, 3600))}
+                      onChange={(e) =>
+                        setDurationSec(clampInt(Number(e.target.value), 1, 3600))
+                      }
                       disabled={isRunning}
                     />
                   </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="rps">Target req/sec</Label>
-                    <In
+                    <Input
+                      id="rps"
+                      type="number"
+                      step={0.1}
+                      min={0.1}
+                      value={rateRps}
+                      onChange={(e) => setRateRps(Number(e.target.value))}
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="concurrency">Concurrency</Label>
+                    <Input
+                      id="concurrency"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={concurrency}
+                      onChange={(e) =>
+                        setConcurrency(clampInt(Number(e.target.value), 1, 20))
+                      }
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Randomize params</Label>
+                    <div className="flex items-center gap-2 h-10 px-3 rounded-md border">
+                      <input
+                        type="checkbox"
+                        checked={randomizeParams}
+                        onChange={(e) => setRandomizeParams(e.target.checked)}
+                        disabled={isRunning}
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        {randomizeParams ? "Mostly cache MISS" : "Cache friendly"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" onClick={runLoadTest} disabled={isRunning}>
+                    Start
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={stopLoadTest}
+                    disabled={!isRunning}
+                  >
+                    Stop
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">Total</div>
+                    <div className="font-mono text-lg">{summary.total ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">200 OK</div>
+                    <div className="font-mono text-lg">{summary.ok ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">Errors</div>
+                    <div className="font-mono text-lg">{summary.errors ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">Avg</div>
+                    <div className="font-mono text-lg">
+                      {summary.avgLatency
+                        ? `${Math.round(summary.avgLatency)} ms`
+                        : "-"}
+                    </div>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">P95</div>
+                    <div className="font-mono text-lg">
+                      {summary.p95Latency
+                        ? `${Math.round(summary.p95Latency)} ms`
+                        : "-"}
+                    </div>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">HIT/MISS</div>
+                    <div className="font-mono text-lg">
+                      {(summary.cacheHit ?? 0) + "/" + (summary.cacheMiss ?? 0)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border rounded-md overflow-hidden">
+                  <div className="bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs text-muted-foreground">
+                    Latest requests (max 100 shown)
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-xs text-muted-foreground">
+                        <tr className="border-b">
+                          <th className="text-left p-2">#</th>
+                          <th className="text-left p-2">Status</th>
+                          <th className="text-left p-2">Latency</th>
+                          <th className="text-left p-2">x-pj-cache</th>
+                          <th className="text-left p-2">cf-cache</th>
+                          <th className="text-left p-2">Retry-After</th>
+                          <th className="text-left p-2">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="p-3 text-muted-foreground">
+                              No results yet
+                            </td>
+                          </tr>
+                        )}
+                        {rows.map((r) => (
+                          <tr key={r.id} className="border-b last:border-b-0">
+                            <td className="p-2 font-mono">{r.id}</td>
+                            <td className="p-2 font-mono">{String(r.status)}</td>
+                            <td className="p-2 font-mono">
+                              {Math.round(r.latencyMs)} ms
+                            </td>
+                            <td className="p-2 font-mono">{r.xPjCache ?? "-"}</td>
+                            <td className="p-2 font-mono">{r.cfCacheStatus ?? "-"}</td>
+                            <td className="p-2 font-mono">{r.retryAfter ?? "-"}</td>
+                            <td className="p-2 font-mono text-xs text-muted-foreground">
+                              {r.error ? r.error.slice(0, 80) : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="beta">
+            <div className="p-12 text-center text-muted-foreground border-2 border-dashed rounded-lg">
+              <p>Documentation pending justification.</p>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </EnterpriseLayout>
+  );
+}
