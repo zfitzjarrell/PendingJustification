@@ -1,3 +1,4 @@
+// frontend/src/pages/Admin.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type LogRow = {
@@ -26,416 +27,380 @@ type StatsResponse = {
   total: number;
   lastHour: number;
   lastDay: number;
-  bySource: Array<{ source: string; v: number }>;
+  bySource: { source: string; v: number }[];
 };
 
-type SingleResult = {
-  ok: boolean;
-  status: number;
-  latencyMs: number;
-  bodyText: string;
-  json?: any;
-  headers: {
-    xPjCache?: string | null;
-    cfCacheStatus?: string | null;
-    retryAfter?: string | null;
-  };
+type RunRow = {
+  id: number;
+  t: string;
+  status: number | null;
+  latencyMs: number | null;
+  xPjCache?: string;
+  cfCacheStatus?: string;
+  retryAfter?: string;
   error?: string;
 };
 
-type LoadRow = {
-  id: string;
-  ts: string;
-  status?: number;
-  latencyMs?: number;
-  xPjCache?: string | null;
-  cfCacheStatus?: string | null;
-  retryAfter?: string | null;
-  error?: string;
-};
+const API_PATH = "/proxy/routes/jaas";
+const LOGS_API = "/admin/api/logs";
+const STATS_API = "/admin/api/stats";
 
-const clampInt = (v: any, def: number, min: number, max: number) => {
+function clampInt(v: any, def: number, min: number, max: number) {
   const n = Number.parseInt(String(v ?? ""), 10);
   if (Number.isNaN(n)) return def;
   return Math.max(min, Math.min(max, n));
-};
+}
 
-const clampFloat = (v: any, def: number, min: number, max: number) => {
-  const n = Number.parseFloat(String(v ?? ""));
-  if (Number.isNaN(n)) return def;
-  return Math.max(min, Math.min(max, n));
-};
+function nowTime() {
+  const d = new Date();
+  return d.toLocaleTimeString();
+}
 
-const nowIso = () => new Date().toISOString();
+function fmtMs(n: number | null | undefined) {
+  if (n === null || n === undefined) return "-";
+  if (!Number.isFinite(n)) return "-";
+  return `${Math.round(n)} ms`;
+}
 
-const fmtMs = (n?: number) => (typeof n === "number" ? `${n} ms` : "-");
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(url, init);
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => "");
+    throw new Error(`${resp.status} ${resp.statusText}${txt ? ` - ${txt}` : ""}`);
+  }
+  return (await resp.json()) as T;
+}
 
 export default function Admin() {
-  // -------------------------
-  // UI Test (single request)
-  // -------------------------
+  // --- Single request inputs
   const [topic, setTopic] = useState("budget");
   const [tone, setTone] = useState("snarky");
-  const [intensity, setIntensity] = useState(3);
+  const [intensity, setIntensity] = useState<number>(3);
 
-  const [singleLoading, setSingleLoading] = useState(false);
-  const [singleResult, setSingleResult] = useState<SingleResult | null>(null);
+  // --- Single request results
+  const [lastStatus, setLastStatus] = useState<number | null>(null);
+  const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
+  const [lastXPjCache, setLastXPjCache] = useState<string>("-");
+  const [lastCfCache, setLastCfCache] = useState<string>("-");
+  const [lastRetryAfter, setLastRetryAfter] = useState<string>("-");
+  const [lastBody, setLastBody] = useState<string>("");
 
-  // -------------------------
-  // UI Load Test
-  // -------------------------
-  const [durationSec, setDurationSec] = useState(20);
-  const [targetRps, setTargetRps] = useState(2);
-  const [concurrency, setConcurrency] = useState(1);
-  const [cacheFriendly, setCacheFriendly] = useState(true);
+  // --- Load test controls
+  const [durationSec, setDurationSec] = useState<number>(20);
+  const [targetRps, setTargetRps] = useState<number>(2);
+  const [concurrency, setConcurrency] = useState<number>(1);
+  const [randomizeParams, setRandomizeParams] = useState<boolean>(false);
 
-  const [loadState, setLoadState] = useState<"idle" | "running" | "stopping" | "done">("idle");
-  const [loadRows, setLoadRows] = useState<LoadRow[]>([]);
-  const [loadTotals, setLoadTotals] = useState({
-    total: 0,
-    ok200: 0,
-    errors: 0,
-    hit: 0,
-    miss: 0,
-    avg: 0,
-    p95: 0,
-  });
+  const [runState, setRunState] = useState<"idle" | "running" | "stopping">("idle");
+  const stopRef = useRef(false);
 
-  const loadAbortRef = useRef<AbortController | null>(null);
-  const inFlightRef = useRef(0);
-  const latenciesRef = useRef<number[]>([]);
+  // --- Load test stats
+  const [rows, setRows] = useState<RunRow[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [okCount, setOkCount] = useState(0);
+  const [errCount, setErrCount] = useState(0);
+  const [hitCount, setHitCount] = useState(0);
+  const [missCount, setMissCount] = useState(0);
 
-  // -------------------------
-  // Logs (D1 via Worker)
-  // -------------------------
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState<string | null>(null);
-  const [logs, setLogs] = useState<LogsResponse | null>(null);
+  const [avgLatency, setAvgLatency] = useState<number | null>(null);
+  const [p95Latency, setP95Latency] = useState<number | null>(null);
 
-  const [logLimit, setLogLimit] = useState(100);
-  const [logOffset, setLogOffset] = useState(0);
-
-  const [filterSource, setFilterSource] = useState("");
-  const [filterPath, setFilterPath] = useState("");
-  const [filterIp, setFilterIp] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
-
+  // --- Logs viewer
   const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [statsLoading, setStatsLoading] = useState(false);
+  const [logs, setLogs] = useState<LogsResponse | null>(null);
+  const [logsLoading, setLogsLoading] = useState(false);
 
-  const endpoint = "/proxy/routes/jaas";
+  const [logLimit, setLogLimit] = useState<number>(100);
+  const [logOffset, setLogOffset] = useState<number>(0);
 
-  const buildQuery = (opts?: { forceMiss?: boolean }) => {
-    const sp = new URLSearchParams();
-    sp.set("topic", topic.trim() || "budget");
-    sp.set("tone", tone.trim() || "snarky");
-    sp.set("intensity", String(clampInt(intensity, 3, 1, 5)));
+  const [filterSource, setFilterSource] = useState<string>("");
+  const [filterPath, setFilterPath] = useState<string>("");
+  const [filterIp, setFilterIp] = useState<string>("");
+  const [filterStatus, setFilterStatus] = useState<string>("");
 
-    // Force cache miss by adding a nonce (or changing values) when not cache-friendly
-    if (opts?.forceMiss) {
-      sp.set("_", `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const headerSource = "ui-admin";
+
+  const computedHitMiss = useMemo(() => `${hitCount}/${missCount}`, [hitCount, missCount]);
+
+  function recomputeLatencyStats(nextRows: RunRow[]) {
+    const lat = nextRows.map((r) => r.latencyMs).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (!lat.length) {
+      setAvgLatency(null);
+      setP95Latency(null);
+      return;
     }
+    const avg = lat.reduce((a, b) => a + b, 0) / lat.length;
+    const sorted = [...lat].sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(0.95 * (sorted.length - 1))];
+    setAvgLatency(avg);
+    setP95Latency(p95);
+  }
 
-    return sp.toString();
-  };
+  async function sendSingleRequest() {
+    setLastStatus(null);
+    setLastLatencyMs(null);
+    setLastXPjCache("-");
+    setLastCfCache("-");
+    setLastRetryAfter("-");
+    setLastBody("");
 
-  const parseHeaders = (resp: Response) => ({
-    xPjCache: resp.headers.get("x-pj-cache"),
-    cfCacheStatus: resp.headers.get("cf-cache-status") || resp.headers.get("Cache-Status"),
-    retryAfter: resp.headers.get("retry-after"),
-  });
+    const qs = new URLSearchParams();
+    qs.set("topic", topic.trim() || "budget");
+    qs.set("tone", tone.trim() || "snarky");
+    qs.set("intensity", String(clampInt(intensity, 3, 1, 5)));
 
-  const safeJson = async (text: string) => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return undefined;
-    }
-  };
-
-  const sendSingle = async () => {
-    setSingleLoading(true);
-    setSingleResult(null);
+    const url = `${API_PATH}?${qs.toString()}`;
 
     const started = performance.now();
     try {
-      const qs = buildQuery({ forceMiss: false });
-      const resp = await fetch(`${endpoint}?${qs}`, {
+      const resp = await fetch(url, {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "X-PJ-Source": "ui-admin",
+          "X-PJ-Source": headerSource,
         },
-        credentials: "omit",
       });
-      const latencyMs = Math.round(performance.now() - started);
-      const bodyText = await resp.text();
-      const json = await safeJson(bodyText);
 
-      setSingleResult({
-        ok: resp.ok,
-        status: resp.status,
-        latencyMs,
-        bodyText,
-        json,
-        headers: parseHeaders(resp),
-      });
+      const elapsed = performance.now() - started;
+
+      setLastStatus(resp.status);
+      setLastLatencyMs(elapsed);
+
+      setLastXPjCache(resp.headers.get("x-pj-cache") || "-");
+      setLastCfCache(resp.headers.get("cf-cache-status") || "-");
+      setLastRetryAfter(resp.headers.get("retry-after") || "-");
+
+      const txt = await resp.text().catch(() => "");
+      setLastBody(txt || "");
     } catch (e: any) {
-      const latencyMs = Math.round(performance.now() - started);
-      setSingleResult({
-        ok: false,
-        status: 0,
-        latencyMs,
-        bodyText: "",
-        headers: {},
-        error: e?.message || String(e),
-      });
-    } finally {
-      setSingleLoading(false);
+      const elapsed = performance.now() - started;
+      setLastStatus(null);
+      setLastLatencyMs(elapsed);
+      setLastBody(e?.message || String(e));
     }
-  };
+  }
 
-  const resetLoad = () => {
-    setLoadRows([]);
-    setLoadTotals({ total: 0, ok200: 0, errors: 0, hit: 0, miss: 0, avg: 0, p95: 0 });
-    latenciesRef.current = [];
-    inFlightRef.current = 0;
-  };
+  async function workerDoRequest(id: number, url: string): Promise<RunRow> {
+    const started = performance.now();
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-PJ-Source": headerSource,
+        },
+      });
 
-  const computeStats = (latencies: number[]) => {
-    if (!latencies.length) return { avg: 0, p95: 0 };
-    const sorted = [...latencies].sort((a, b) => a - b);
-    const avg = Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length);
-    const p95Index = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95) - 1));
-    const p95 = Math.round(sorted[p95Index] ?? sorted[sorted.length - 1]);
-    return { avg, p95 };
-  };
+      const elapsed = performance.now() - started;
 
-  const addLoadRow = (row: LoadRow) => {
-    setLoadRows((prev) => {
-      const next = [row, ...prev];
-      return next.slice(0, 100);
-    });
-  };
+      const xPjCache = resp.headers.get("x-pj-cache") || "";
+      const cfCacheStatus = resp.headers.get("cf-cache-status") || "";
+      const retryAfter = resp.headers.get("retry-after") || "";
 
-  const bumpTotals = (update: Partial<typeof loadTotals>) => {
-    setLoadTotals((prev) => {
-      const next = { ...prev, ...update };
-      return next;
-    });
-  };
+      // Consume body so browser doesn’t keep streams open during bursty loads
+      await resp.text().catch(() => "");
 
-  const startLoadTest = async () => {
-    if (loadState === "running") return;
+      return {
+        id,
+        t: nowTime(),
+        status: resp.status,
+        latencyMs: elapsed,
+        xPjCache,
+        cfCacheStatus,
+        retryAfter,
+      };
+    } catch (e: any) {
+      const elapsed = performance.now() - started;
+      return {
+        id,
+        t: nowTime(),
+        status: null,
+        latencyMs: elapsed,
+        error: e?.message || String(e),
+      };
+    }
+  }
 
-    resetLoad();
-    setLoadState("running");
+  function buildUrlForLoadTest(i: number) {
+    const qs = new URLSearchParams();
+    const t = topic.trim() || "budget";
+    const tn = tone.trim() || "snarky";
+    const inten = clampInt(intensity, 3, 1, 5);
+
+    qs.set("topic", t);
+    qs.set("tone", tn);
+    qs.set("intensity", String(inten));
+
+    if (randomizeParams) {
+      // Force cache misses (and avoid “everything is identical” effects)
+      qs.set("_r", `${Date.now()}-${i}-${Math.random().toString(16).slice(2)}`);
+    }
+
+    return `${API_PATH}?${qs.toString()}`;
+  }
+
+  async function runLoadTest() {
+    if (runState === "running") return;
+
+    // reset
+    stopRef.current = false;
+    setRunState("running");
+
+    setRows([]);
+    setTotalCount(0);
+    setOkCount(0);
+    setErrCount(0);
+    setHitCount(0);
+    setMissCount(0);
+    setAvgLatency(null);
+    setP95Latency(null);
 
     const dur = clampInt(durationSec, 20, 1, 600);
-    const rps = clampFloat(targetRps, 2, 0.1, 50);
-    const conc = clampInt(concurrency, 1, 1, 50);
+    const rps = Math.max(0.1, Number.isFinite(targetRps) ? targetRps : 1);
+    const conc = clampInt(concurrency, 1, 1, 20);
 
-    setDurationSec(dur);
-    setTargetRps(rps);
-    setConcurrency(conc);
-
-    const abort = new AbortController();
-    loadAbortRef.current = abort;
-
+    // Simple scheduler: aim for rps, cap in-flight requests by concurrency
     const endAt = Date.now() + dur * 1000;
-    const intervalMs = Math.max(50, Math.round(1000 / rps)); // schedule tick based on target rps
+    let seq = 0;
+    let inFlight = 0;
 
-    const tick = async () => {
-      if (abort.signal.aborted) return;
-      if (Date.now() >= endAt) {
-        setLoadState("done");
-        return;
-      }
+    const nextBatchWaitMs = Math.max(10, Math.round(1000 / rps));
 
-      // Respect concurrency cap
-      if (inFlightRef.current >= conc) return;
+    const appendRow = (r: RunRow) => {
+      setRows((prev) => {
+        const next = [r, ...prev].slice(0, 100); // keep UI fast
+        recomputeLatencyStats(next);
+        return next;
+      });
 
-      inFlightRef.current += 1;
-      const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const started = performance.now();
+      setTotalCount((x) => x + 1);
 
-      const forceMiss = !cacheFriendly;
-      const qs = buildQuery({ forceMiss });
-      const url = `${endpoint}?${qs}`;
+      if (r.status && r.status >= 200 && r.status < 300) setOkCount((x) => x + 1);
+      else setErrCount((x) => x + 1);
 
-      try {
-        const resp = await fetch(url, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "X-PJ-Source": "ui-admin-loadtest",
-          },
-          credentials: "omit",
-          signal: abort.signal,
-        });
-
-        const latencyMs = Math.round(performance.now() - started);
-        latenciesRef.current.push(latencyMs);
-
-        const hdrs = parseHeaders(resp);
-        const xpj = (hdrs.xPjCache || "").toUpperCase();
-        const isHit = xpj === "HIT";
-        const isMiss = xpj === "MISS";
-
-        addLoadRow({
-          id,
-          ts: nowIso(),
-          status: resp.status,
-          latencyMs,
-          xPjCache: hdrs.xPjCache,
-          cfCacheStatus: hdrs.cfCacheStatus,
-          retryAfter: hdrs.retryAfter,
-        });
-
-        const { avg, p95 } = computeStats(latenciesRef.current);
-        bumpTotals({
-          total: loadTotals.total + 1,
-          ok200: loadTotals.ok200 + (resp.status === 200 ? 1 : 0),
-          errors: loadTotals.errors + (resp.status >= 400 ? 1 : 0),
-          hit: loadTotals.hit + (isHit ? 1 : 0),
-          miss: loadTotals.miss + (isMiss ? 1 : 0),
-          avg,
-          p95,
-        });
-      } catch (e: any) {
-        const latencyMs = Math.round(performance.now() - started);
-
-        addLoadRow({
-          id,
-          ts: nowIso(),
-          error: e?.message || String(e),
-          latencyMs,
-        });
-
-        const { avg, p95 } = computeStats(latenciesRef.current);
-        bumpTotals({
-          total: loadTotals.total + 1,
-          errors: loadTotals.errors + 1,
-          avg,
-          p95,
-        });
-      } finally {
-        inFlightRef.current -= 1;
-      }
+      const pj = (r.xPjCache || "").toUpperCase();
+      if (pj === "HIT") setHitCount((x) => x + 1);
+      if (pj === "MISS") setMissCount((x) => x + 1);
     };
 
-    // schedule ticks
-    const timer = window.setInterval(tick, intervalMs);
+    while (Date.now() < endAt && !stopRef.current) {
+      while (inFlight < conc && Date.now() < endAt && !stopRef.current) {
+        const id = ++seq;
+        inFlight++;
 
-    // hard stop at end
-    window.setTimeout(() => {
-      if (!abort.signal.aborted) {
-        window.clearInterval(timer);
-        setLoadState("done");
+        const url = buildUrlForLoadTest(id);
+
+        workerDoRequest(id, url)
+          .then(appendRow)
+          .finally(() => {
+            inFlight--;
+          });
       }
-    }, dur * 1000 + 50);
-  };
 
-  const stopLoadTest = () => {
-    if (loadState !== "running") return;
-    setLoadState("stopping");
-    loadAbortRef.current?.abort();
-    setTimeout(() => setLoadState("done"), 200);
-  };
+      await sleep(nextBatchWaitMs);
+    }
 
-  const buildLogsUrl = useMemo(() => {
-    const sp = new URLSearchParams();
-    sp.set("limit", String(clampInt(logLimit, 100, 1, 500)));
-    sp.set("offset", String(clampInt(logOffset, 0, 0, 20000)));
-    if (filterSource.trim()) sp.set("source", filterSource.trim());
-    if (filterPath.trim()) sp.set("path", filterPath.trim());
-    if (filterIp.trim()) sp.set("ip", filterIp.trim());
-    if (filterStatus.trim()) sp.set("status", filterStatus.trim());
-    return `/admin/api/logs?${sp.toString()}`;
-  }, [logLimit, logOffset, filterSource, filterPath, filterIp, filterStatus]);
+    // Drain remaining in-flight requests
+    const drainStart = Date.now();
+    while (inFlight > 0 && Date.now() - drainStart < 10_000) {
+      await sleep(50);
+    }
 
-  const refreshLogs = async () => {
-    setLogsLoading(true);
-    setLogsError(null);
+    setRunState("idle");
+  }
+
+  function stopLoadTest() {
+    if (runState !== "running") return;
+    stopRef.current = true;
+    setRunState("stopping");
+    // runLoadTest loop will flip to idle after drain
+  }
+
+  async function refreshStats() {
     try {
-      const resp = await fetch(buildLogsUrl, {
-        method: "GET",
+      const s = await fetchJson<StatsResponse>(STATS_API, {
         headers: { Accept: "application/json" },
       });
-      const text = await resp.text();
-      const json = await safeJson(text);
-
-      if (!resp.ok) {
-        setLogsError((json?.error as string) || `Failed to load logs (${resp.status})`);
-        setLogs(null);
-        return;
-      }
-      setLogs(json as LogsResponse);
+      setStats(s);
     } catch (e: any) {
-      setLogsError(e?.message || String(e));
+      setStats(null);
+    }
+  }
+
+  async function refreshLogs() {
+    setLogsLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", String(clampInt(logLimit, 100, 1, 500)));
+      qs.set("offset", String(clampInt(logOffset, 0, 0, 20000)));
+
+      if (filterSource.trim()) qs.set("source", filterSource.trim());
+      if (filterPath.trim()) qs.set("path", filterPath.trim());
+      if (filterIp.trim()) qs.set("ip", filterIp.trim());
+      if (filterStatus.trim()) qs.set("status", filterStatus.trim());
+
+      const resp = await fetchJson<LogsResponse>(`${LOGS_API}?${qs.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      setLogs(resp);
+    } catch (e: any) {
       setLogs(null);
     } finally {
       setLogsLoading(false);
     }
-  };
-
-  const refreshStats = async () => {
-    setStatsLoading(true);
-    try {
-      const resp = await fetch("/admin/api/stats", {
-        method: "GET",
-        headers: { Accept: "application/json" },
-      });
-      const text = await resp.text();
-      const json = await safeJson(text);
-      if (!resp.ok) {
-        setStats(null);
-        return;
-      }
-      setStats(json as StatsResponse);
-    } catch {
-      setStats(null);
-    } finally {
-      setStatsLoading(false);
-    }
-  };
+  }
 
   useEffect(() => {
-    // Load logs/stats on entry
-    refreshLogs();
+    // Load initial data
     refreshStats();
+    refreshLogs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const totalPages = useMemo(() => {
-    const total = logs?.total ?? 0;
-    return total > 0 ? Math.ceil(total / logLimit) : 1;
-  }, [logs?.total, logLimit]);
+  useEffect(() => {
+    // derive P95 from displayed rows (the “latest 100 shown”)
+    const lat = rows.map((r) => r.latencyMs).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (!lat.length) return;
 
-  const currentPage = useMemo(() => {
-    return Math.floor(logOffset / logLimit) + 1;
-  }, [logOffset, logLimit]);
+    const sorted = [...lat].sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(0.95 * (sorted.length - 1))];
+    setP95Latency(p95);
+  }, [rows]);
+
+  const statusPill = (state: string) => {
+    const base =
+      "inline-flex items-center rounded px-2 py-1 text-xs font-semibold border";
+    if (state === "running") return `${base} bg-green-50 border-green-200 text-green-800`;
+    if (state === "stopping") return `${base} bg-yellow-50 border-yellow-200 text-yellow-800`;
+    return `${base} bg-gray-50 border-gray-200 text-gray-700`;
+  };
 
   return (
-    <div className="mx-auto max-w-6xl p-6 space-y-6">
-      <div className="space-y-1">
+    <div className="mx-auto max-w-6xl p-6 space-y-8">
+      <div className="space-y-2">
         <h1 className="text-2xl font-semibold">Admin</h1>
         <p className="text-sm text-gray-600">
-          This page is protected by Cloudflare Zero Trust Access. It contains browser-driven API testing and
-          request logging views.
+          This page is protected by Cloudflare Zero Trust. No app password needed.
+          All calls include <span className="font-mono">X-PJ-Source: {headerSource}</span> so you can
+          distinguish UI traffic from scripts.
         </p>
       </div>
 
       {/* Interactive UI Test */}
-      <div className="rounded-lg border bg-white p-5 space-y-4">
-        <div>
+      <section className="rounded-lg border p-4 space-y-4 bg-white">
+        <div className="space-y-1">
           <h2 className="text-lg font-semibold">Interactive UI Test</h2>
           <p className="text-sm text-gray-600">
-            Runs calls from the browser so you can validate real user behavior: caching, cookies, CORS, and in-flight overlap.
+            Runs calls from the browser so you can validate real user behavior: caching, cookies,
+            CORS, and in-flight overlap.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Topic</label>
             <input
@@ -445,6 +410,7 @@ export default function Admin() {
               placeholder="budget"
             />
           </div>
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Tone</label>
             <input
@@ -454,78 +420,81 @@ export default function Admin() {
               placeholder="snarky"
             />
           </div>
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Intensity (1-5)</label>
             <input
               className="w-full rounded border px-3 py-2"
-              value={intensity}
-              onChange={(e) => setIntensity(clampInt(e.target.value, 3, 1, 5))}
               type="number"
               min={1}
               max={5}
+              value={intensity}
+              onChange={(e) => setIntensity(clampInt(e.target.value, 3, 1, 5))}
             />
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           <button
-            className="rounded border bg-blue-600 text-white px-4 py-2 text-sm disabled:opacity-60"
-            onClick={sendSingle}
-            disabled={singleLoading}
+            className="rounded border bg-blue-600 text-white px-4 py-2 text-sm font-semibold hover:bg-blue-700"
+            onClick={sendSingleRequest}
           >
-            {singleLoading ? "Sending..." : "Send Single Request"}
+            Send Single Request
           </button>
 
           <div className="text-sm text-gray-600">
-            Endpoint: <span className="font-mono">{endpoint}</span>
+            Endpoint: <span className="font-mono">{API_PATH}</span>
           </div>
         </div>
 
         <div className="rounded border bg-gray-50 p-3">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
             <div>
               <div className="text-gray-500">Last status</div>
-              <div className="font-medium">{singleResult ? singleResult.status : "-"}</div>
+              <div className="font-semibold">{lastStatus ?? "-"}</div>
             </div>
             <div>
               <div className="text-gray-500">Latency</div>
-              <div className="font-medium">{singleResult ? fmtMs(singleResult.latencyMs) : "-"}</div>
+              <div className="font-semibold">{fmtMs(lastLatencyMs)}</div>
             </div>
             <div>
               <div className="text-gray-500">x-pj-cache</div>
-              <div className="font-medium">{singleResult?.headers?.xPjCache ?? "-"}</div>
+              <div className="font-mono text-xs">{lastXPjCache}</div>
             </div>
             <div>
               <div className="text-gray-500">cf-cache-status</div>
-              <div className="font-medium">{singleResult?.headers?.cfCacheStatus ?? "-"}</div>
+              <div className="font-mono text-xs">{lastCfCache}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Retry-After</div>
+              <div className="font-mono text-xs">{lastRetryAfter}</div>
             </div>
           </div>
 
-          {singleResult?.error ? (
-            <div className="mt-3 text-sm text-red-600">Error: {singleResult.error}</div>
-          ) : null}
-
-          {singleResult ? (
-            <pre className="mt-3 max-h-64 overflow-auto rounded bg-white p-3 text-xs">
-              {singleResult.json ? JSON.stringify(singleResult.json, null, 2) : singleResult.bodyText}
+          <div className="mt-3">
+            <div className="text-gray-500 text-sm mb-1">Response</div>
+            <pre className="max-h-56 overflow-auto rounded bg-white border p-3 text-xs whitespace-pre-wrap">
+              {lastBody || "—"}
             </pre>
-          ) : null}
+          </div>
         </div>
-      </div>
+      </section>
 
       {/* UI Load Test */}
-      <div className="rounded-lg border bg-white p-5 space-y-4">
+      <section className="rounded-lg border p-4 space-y-4 bg-white">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="space-y-1">
             <h2 className="text-lg font-semibold">UI Load Test</h2>
             <p className="text-sm text-gray-600">
-              Generates browser-driven traffic with a concurrency cap. Cache friendly keeps params stable. Unchecking forces cache misses.
+              Generates browser-driven traffic with a concurrency cap.
+              Randomize params forces cache misses.
             </p>
           </div>
-          <div className="text-xs rounded bg-gray-100 px-2 py-1">{loadState.toUpperCase()}</div>
+
+          <div className={statusPill(runState)}>{runState === "idle" ? "Idle" : runState}</div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Duration (sec)</label>
             <input
@@ -535,83 +504,106 @@ export default function Admin() {
               max={600}
               value={durationSec}
               onChange={(e) => setDurationSec(clampInt(e.target.value, 20, 1, 600))}
-              disabled={loadState === "running"}
             />
           </div>
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Target req/sec</label>
             <input
               className="w-full rounded border px-3 py-2"
               type="number"
-              step="0.1"
               min={0.1}
-              max={50}
+              step={0.1}
               value={targetRps}
-              onChange={(e) => setTargetRps(clampFloat(e.target.value, 2, 0.1, 50))}
-              disabled={loadState === "running"}
+              onChange={(e) => setTargetRps(Number(e.target.value))}
             />
           </div>
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Concurrency</label>
             <input
               className="w-full rounded border px-3 py-2"
               type="number"
               min={1}
-              max={50}
+              max={20}
               value={concurrency}
-              onChange={(e) => setConcurrency(clampInt(e.target.value, 1, 1, 50))}
-              disabled={loadState === "running"}
+              onChange={(e) => setConcurrency(clampInt(e.target.value, 1, 1, 20))}
             />
           </div>
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Randomize params</label>
-            <label className="flex items-center gap-2 rounded border px-3 py-2">
+            <div className="flex items-center gap-2 rounded border px-3 py-2">
               <input
                 type="checkbox"
-                checked={cacheFriendly}
-                onChange={(e) => setCacheFriendly(e.target.checked)}
-                disabled={loadState === "running"}
+                checked={randomizeParams}
+                onChange={(e) => setRandomizeParams(e.target.checked)}
               />
-              <span className="text-sm">Cache friendly</span>
-            </label>
+              <span className="text-sm text-gray-700">
+                Cache friendly
+              </span>
+            </div>
+            <div className="text-xs text-gray-500">
+              Unchecked = consistent params (more cache hits). Checked = forced misses.
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           <button
-            className="rounded border bg-blue-600 text-white px-4 py-2 text-sm disabled:opacity-60"
-            onClick={startLoadTest}
-            disabled={loadState === "running"}
+            className="rounded border bg-blue-600 text-white px-4 py-2 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+            onClick={runLoadTest}
+            disabled={runState !== "idle"}
           >
             Start
           </button>
           <button
-            className="rounded border bg-gray-200 px-4 py-2 text-sm disabled:opacity-60"
+            className="rounded border bg-gray-100 text-gray-800 px-4 py-2 text-sm font-semibold hover:bg-gray-200 disabled:opacity-50"
             onClick={stopLoadTest}
-            disabled={loadState !== "running"}
+            disabled={runState === "idle"}
           >
             Stop
           </button>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <StatBox label="Total" value={loadTotals.total} />
-          <StatBox label="200 OK" value={loadTotals.ok200} />
-          <StatBox label="Errors" value={loadTotals.errors} />
-          <StatBox label="Avg" value={loadTotals.total ? `${loadTotals.avg} ms` : "-"} />
-          <StatBox label="P95" value={loadTotals.total ? `${loadTotals.p95} ms` : "-"} />
-          <StatBox label="HIT/MISS" value={`${loadTotals.hit}/${loadTotals.miss}`} />
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">Total</div>
+            <div className="text-lg font-semibold">{totalCount}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">200 OK</div>
+            <div className="text-lg font-semibold">{okCount}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">Errors</div>
+            <div className="text-lg font-semibold">{errCount}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">Avg</div>
+            <div className="text-lg font-semibold">{fmtMs(avgLatency)}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">P95</div>
+            <div className="text-lg font-semibold">{fmtMs(p95Latency)}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">HIT/MISS</div>
+            <div className="text-lg font-semibold">{computedHitMiss}</div>
+          </div>
         </div>
 
-        <div className="rounded border">
-          <div className="px-3 py-2 text-sm font-medium bg-gray-50 border-b">
+        <div className="rounded border overflow-hidden">
+          <div className="bg-gray-50 px-3 py-2 text-sm font-semibold">
             Latest requests (max 100 shown)
           </div>
+
           <div className="overflow-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-white sticky top-0">
-                <tr className="text-left border-b">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white border-b">
+                <tr className="text-left">
                   <th className="p-2">#</th>
+                  <th className="p-2">Time</th>
                   <th className="p-2">Status</th>
                   <th className="p-2">Latency</th>
                   <th className="p-2">x-pj-cache</th>
@@ -621,22 +613,23 @@ export default function Admin() {
                 </tr>
               </thead>
               <tbody>
-                {loadRows.length === 0 ? (
+                {rows.length === 0 ? (
                   <tr>
-                    <td className="p-3 text-gray-500" colSpan={7}>
+                    <td className="p-3 text-gray-500" colSpan={8}>
                       No results yet
                     </td>
                   </tr>
                 ) : (
-                  loadRows.map((r, idx) => (
-                    <tr key={r.id} className="border-b">
-                      <td className="p-2 font-mono text-xs">{idx + 1}</td>
+                  rows.map((r) => (
+                    <tr key={r.id} className="border-t">
+                      <td className="p-2 font-mono text-xs">{r.id}</td>
+                      <td className="p-2 font-mono text-xs">{r.t}</td>
                       <td className="p-2">{r.status ?? "-"}</td>
                       <td className="p-2">{fmtMs(r.latencyMs)}</td>
-                      <td className="p-2">{r.xPjCache ?? "-"}</td>
-                      <td className="p-2">{r.cfCacheStatus ?? "-"}</td>
-                      <td className="p-2">{r.retryAfter ?? "-"}</td>
-                      <td className="p-2 text-red-600">{r.error ?? ""}</td>
+                      <td className="p-2 font-mono text-xs">{r.xPjCache || "-"}</td>
+                      <td className="p-2 font-mono text-xs">{r.cfCacheStatus || "-"}</td>
+                      <td className="p-2 font-mono text-xs">{r.retryAfter || "-"}</td>
+                      <td className="p-2 text-xs text-red-700">{r.error || ""}</td>
                     </tr>
                   ))
                 )}
@@ -644,91 +637,74 @@ export default function Admin() {
             </table>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Logs */}
-      <div className="rounded-lg border bg-white p-5 space-y-4">
+      {/* Logs & Stats */}
+      <section className="rounded-lg border p-4 space-y-4 bg-white">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="space-y-1">
             <h2 className="text-lg font-semibold">Request Logs (D1)</h2>
             <p className="text-sm text-gray-600">
-              These are the logs written by the Worker. Use filters to see UI vs programmatic usage.
+              These are written by the Worker (source, IP, user agent, cache, latency).
             </p>
           </div>
-          <div className="flex gap-2">
+
+          <div className="flex items-center gap-2">
             <button
-              className="rounded border bg-gray-100 px-3 py-2 text-sm disabled:opacity-60"
-              onClick={refreshStats}
-              disabled={statsLoading}
+              className="rounded border bg-gray-100 text-gray-800 px-3 py-2 text-sm font-semibold hover:bg-gray-200"
+              onClick={async () => {
+                await refreshStats();
+                await refreshLogs();
+              }}
             >
-              {statsLoading ? "Refreshing..." : "Refresh Stats"}
-            </button>
-            <button
-              className="rounded border bg-gray-100 px-3 py-2 text-sm disabled:opacity-60"
-              onClick={refreshLogs}
-              disabled={logsLoading}
-            >
-              {logsLoading ? "Refreshing..." : "Refresh Logs"}
+              Refresh
             </button>
           </div>
         </div>
 
-        {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <StatBox label="Total" value={stats?.total ?? "-"} />
-          <StatBox label="Last hour" value={stats?.lastHour ?? "-"} />
-          <StatBox label="Last day" value={stats?.lastDay ?? "-"} />
           <div className="rounded border p-3">
-            <div className="text-xs text-gray-500">Top sources (last day)</div>
-            <div className="mt-2 space-y-1 text-sm">
-              {(stats?.bySource ?? []).slice(0, 6).map((s) => (
-                <div key={s.source} className="flex justify-between">
-                  <span className="font-mono text-xs">{s.source || "unknown"}</span>
-                  <span>{s.v}</span>
-                </div>
-              ))}
-              {(stats?.bySource ?? []).length === 0 ? <div className="text-gray-500">-</div> : null}
+            <div className="text-xs text-gray-500">Total</div>
+            <div className="text-lg font-semibold">{stats?.total ?? "-"}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">Last hour</div>
+            <div className="text-lg font-semibold">{stats?.lastHour ?? "-"}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">Last day</div>
+            <div className="text-lg font-semibold">{stats?.lastDay ?? "-"}</div>
+          </div>
+          <div className="rounded border p-3">
+            <div className="text-xs text-gray-500">By source (24h)</div>
+            <div className="text-sm">
+              {(stats?.bySource || []).length ? (
+                <ul className="space-y-1">
+                  {stats!.bySource.slice(0, 5).map((s) => (
+                    <li key={s.source} className="flex items-center justify-between">
+                      <span className="font-mono text-xs">{s.source}</span>
+                      <span className="font-semibold">{s.v}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-gray-500">-</div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-          <div className="space-y-1 md:col-span-1">
-            <label className="text-sm font-medium">Limit</label>
-            <input
-              className="w-full rounded border px-3 py-2"
-              type="number"
-              min={1}
-              max={500}
-              value={logLimit}
-              onChange={(e) => setLogLimit(clampInt(e.target.value, 100, 1, 500))}
-            />
-          </div>
-
-          <div className="space-y-1 md:col-span-1">
-            <label className="text-sm font-medium">Offset</label>
-            <input
-              className="w-full rounded border px-3 py-2"
-              type="number"
-              min={0}
-              max={20000}
-              value={logOffset}
-              onChange={(e) => setLogOffset(clampInt(e.target.value, 0, 0, 20000))}
-            />
-          </div>
-
-          <div className="space-y-1 md:col-span-1">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="space-y-1">
             <label className="text-sm font-medium">Source</label>
             <input
               className="w-full rounded border px-3 py-2"
               value={filterSource}
               onChange={(e) => setFilterSource(e.target.value)}
-              placeholder="ui-admin"
+              placeholder="ui-admin | ui | python | unknown"
             />
           </div>
-
-          <div className="space-y-1 md:col-span-1">
+          <div className="space-y-1">
             <label className="text-sm font-medium">Path</label>
             <input
               className="w-full rounded border px-3 py-2"
@@ -737,8 +713,7 @@ export default function Admin() {
               placeholder="/proxy/routes/jaas"
             />
           </div>
-
-          <div className="space-y-1 md:col-span-1">
+          <div className="space-y-1">
             <label className="text-sm font-medium">IP</label>
             <input
               className="w-full rounded border px-3 py-2"
@@ -747,8 +722,7 @@ export default function Admin() {
               placeholder="1.2.3.4"
             />
           </div>
-
-          <div className="space-y-1 md:col-span-1">
+          <div className="space-y-1">
             <label className="text-sm font-medium">Status</label>
             <input
               className="w-full rounded border px-3 py-2"
@@ -757,45 +731,120 @@ export default function Admin() {
               placeholder="200"
             />
           </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Paging</label>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className="w-full rounded border px-3 py-2"
+                type="number"
+                min={1}
+                max={500}
+                value={logLimit}
+                onChange={(e) => setLogLimit(clampInt(e.target.value, 100, 1, 500))}
+              />
+              <input
+                className="w-full rounded border px-3 py-2"
+                type="number"
+                min={0}
+                max={20000}
+                value={logOffset}
+                onChange={(e) => setLogOffset(clampInt(e.target.value, 0, 0, 20000))}
+              />
+            </div>
+            <div className="text-xs text-gray-500">limit / offset</div>
+          </div>
         </div>
 
-        {logsError ? <div className="text-sm text-red-600">{logsError}</div> : null}
-
-        <div className="text-sm text-gray-600">
-          Showing page {currentPage} of {totalPages} (total rows: {logs?.total ?? 0})
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded border bg-blue-600 text-white px-4 py-2 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+            onClick={refreshLogs}
+            disabled={logsLoading}
+          >
+            {logsLoading ? "Loading..." : "Load logs"}
+          </button>
+          <button
+            className="rounded border bg-gray-100 text-gray-800 px-4 py-2 text-sm font-semibold hover:bg-gray-200"
+            onClick={() => setLogOffset((o) => Math.max(0, o - logLimit))}
+          >
+            Prev
+          </button>
+          <button
+            className="rounded border bg-gray-100 text-gray-800 px-4 py-2 text-sm font-semibold hover:bg-gray-200"
+            onClick={() => setLogOffset((o) => o + logLimit)}
+          >
+            Next
+          </button>
+          <div className="text-sm text-gray-600">
+            {logs ? (
+              <>
+                Showing {logs.rows.length} of {logs.total} (offset {logs.offset})
+              </>
+            ) : (
+              "—"
+            )}
+          </div>
         </div>
 
-        <div className="overflow-auto rounded border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr className="text-left border-b">
-                <th className="p-2">id</th>
-                <th className="p-2">ts</th>
-                <th className="p-2">ip</th>
-                <th className="p-2">source</th>
-                <th className="p-2">method</th>
-                <th className="p-2">path</th>
-                <th className="p-2">status</th>
-                <th className="p-2">latency</th>
-                <th className="p-2">cache</th>
-                <th className="p-2">user_agent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(logs?.rows ?? []).length === 0 ? (
-                <tr>
-                  <td className="p-3 text-gray-500" colSpan={10}>
-                    {logsLoading ? "Loading..." : "No rows returned (try Refresh Logs)."}
-                  </td>
+        <div className="rounded border overflow-hidden">
+          <div className="bg-gray-50 px-3 py-2 text-sm font-semibold">
+            Latest D1 rows
+          </div>
+
+          <div className="overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white border-b">
+                <tr className="text-left">
+                  <th className="p-2">id</th>
+                  <th className="p-2">ts</th>
+                  <th className="p-2">ip</th>
+                  <th className="p-2">source</th>
+                  <th className="p-2">method</th>
+                  <th className="p-2">path</th>
+                  <th className="p-2">status</th>
+                  <th className="p-2">latency</th>
+                  <th className="p-2">cache</th>
+                  <th className="p-2">user agent</th>
                 </tr>
-              ) : (
-                (logs?.rows ?? []).map((r) => (
-                  <tr key={r.id} className="border-b">
-                    <td className="p-2 font-mono text-xs">{r.id}</td>
-                    <td className="p-2 font-mono text-xs">{r.ts}</td>
-                    <td className="p-2 font-mono text-xs">{r.ip}</td>
-                    <td className="p-2 font-mono text-xs">{r.source}</td>
-                    <td className="p-2 font-mono text-xs">{r.method}</td>
-                    <td className="p-2 font-mono text-xs">{r.path}</td>
-                    <td className="p-2">{r.status}</td>
-                    <td className="p-2">{fmtMs(r.latency_ms_
+              </thead>
+
+              <tbody>
+                {!logs?.rows?.length ? (
+                  <tr>
+                    <td className="p-3 text-gray-500" colSpan={10}>
+                      No logs loaded (or none match your filters).
+                    </td>
+                  </tr>
+                ) : (
+                  logs.rows.map((r) => (
+                    <tr key={r.id} className="border-t">
+                      <td className="p-2 font-mono text-xs">{r.id}</td>
+                      <td className="p-2 font-mono text-xs">{r.ts}</td>
+                      <td className="p-2 font-mono text-xs">{r.ip}</td>
+                      <td className="p-2 font-mono text-xs">{r.source}</td>
+                      <td className="p-2 font-mono text-xs">{r.method}</td>
+                      <td className="p-2 font-mono text-xs">{r.path}</td>
+                      <td className="p-2">{r.status}</td>
+                      <td className="p-2">{fmtMs(r.latency_ms)}</td>
+                      <td className="p-2 font-mono text-xs">{r.cache}</td>
+                      <td className="p-2 font-mono text-xs max-w-[420px] truncate" title={r.user_agent}>
+                        {r.user_agent}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="text-xs text-gray-500">
+          Cloudflare dashboard logs can’t be pulled directly into the browser without creating your own
+          backend endpoint (Worker) that calls Cloudflare’s APIs using an API token. If you want that,
+          we can add a Worker route like <span className="font-mono">/admin/api/cf-analytics</span> and
+          surface it here.
+        </div>
+      </section>
+    </div>
+  );
+}
