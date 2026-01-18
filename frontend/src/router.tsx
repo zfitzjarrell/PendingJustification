@@ -8,34 +8,38 @@ export const SuspenseWrapper = ({ children }: { children: ReactNode }) => {
 };
 
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
-const SomethingWentWrongPage = lazy(
-  () => import("./pages/SomethingWentWrongPage"),
-);
+const SomethingWentWrongPage = lazy(() => import("./pages/SomethingWentWrongPage"));
 
-export const router = createBrowserRouter(
-  [
-    {
-      element: (
-        <AppProvider>
-          <SuspenseWrapper>
-            <Outlet />
-          </SuspenseWrapper>
-        </AppProvider>
-      ),
-      children: userRoutes
-    },
-    {
-      path: "*",
-      element: (
+// ✅ Add Admin here (manual route, not dependent on user-routes autogen)
+const Admin = lazy(() => import("./pages/Admin"));
+
+export const router = createBrowserRouter([
+  {
+    element: (
+      <AppProvider>
         <SuspenseWrapper>
-          <NotFoundPage />
+          <Outlet />
         </SuspenseWrapper>
-      ),
-      errorElement: (
-        <SuspenseWrapper>
-          <SomethingWentWrongPage />
-        </SuspenseWrapper>
-      ),
-    },
-  ]
-);
+      </AppProvider>
+    ),
+    children: [
+      ...userRoutes,
+
+      // ✅ Register /admin explicitly
+      { path: "/admin", element: <Admin /> },
+    ],
+  },
+  {
+    path: "*",
+    element: (
+      <SuspenseWrapper>
+        <NotFoundPage />
+      </SuspenseWrapper>
+    ),
+    errorElement: (
+      <SuspenseWrapper>
+        <SomethingWentWrongPage />
+      </SuspenseWrapper>
+    ),
+  },
+]);
