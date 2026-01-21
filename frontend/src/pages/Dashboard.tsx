@@ -331,7 +331,7 @@ export default function Dashboard() {
         experience: String(experience || "unknown"),
       };
 
-      const res = await fetch("/feedback", {
+      const res = await fetch("/proxy/feedback", {
         method: "POST",
         credentials: "include",
         headers: {
