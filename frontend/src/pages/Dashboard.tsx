@@ -28,6 +28,10 @@ import {
   Clock,
   CheckCircle2,
   Info,
+  MessageSquare,
+  HelpCircle,
+  Send,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
@@ -37,6 +41,19 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+
+// If you have shadcn Dialog + Textarea components, use them.
+// If not, this file still compiles because we implement a lightweight modal + textarea fallback below.
+// import {
+//   Dialog,
+//   DialogContent,
+//   DialogDescription,
+//   DialogFooter,
+//   DialogHeader,
+//   DialogTitle,
+//   DialogTrigger,
+// } from "@/components/ui/dialog";
+// import { Textarea } from "@/components/ui/textarea";
 
 // Import Types
 import { Topic, Tone } from "types";
@@ -111,6 +128,13 @@ async function fetchJson<T>(url: string): Promise<T> {
 const DROPDOWN_STALE_TIME_MS = 1000 * 60 * 60 * 24; // 24 hours
 const DROPDOWN_CACHE_TIME_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
+type FeedbackPayload = {
+  email?: string | null;
+  comments: string;
+  page: string;
+  experience: string;
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { experience } = useExperience();
@@ -122,6 +146,13 @@ export default function Dashboard() {
   const [justification, setJustification] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [meta, setMeta] = useState<any>(null);
+
+  // Feedback UI state
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [showActualFeedbackForm, setShowActualFeedbackForm] = useState(false);
+  const [feedbackEmail, setFeedbackEmail] = useState("");
+  const [feedbackComments, setFeedbackComments] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   // Safe copy wrapper: NEVER crash the render tree because a copy key is missing.
   const t = (key: string, fallback?: string) => {
@@ -270,9 +301,221 @@ export default function Dashboard() {
     "REC_MODIFIED",
   ];
 
+  const openFeedback = () => {
+    setFeedbackOpen(true);
+    setShowActualFeedbackForm(false);
+    setFeedbackEmail("");
+    setFeedbackComments("");
+  };
+
+  const closeFeedback = () => {
+    setFeedbackOpen(false);
+    setShowActualFeedbackForm(false);
+  };
+
+  async function submitFeedback() {
+    const comments = feedbackComments.trim();
+    const email = feedbackEmail.trim();
+
+    if (!comments) {
+      toast.error("Please add a comment. Or don’t. But then nothing happens.");
+      return;
+    }
+
+    setFeedbackSubmitting(true);
+    try {
+      const payload: FeedbackPayload = {
+        email: email.length ? email : null,
+        comments,
+        page: window.location.pathname || "/",
+        experience: String(experience || "unknown"),
+      };
+
+      const res = await fetch("/feedback", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-PJ-Source": "ui",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text();
+      const contentType = res.headers.get("content-type") || "";
+
+      if (!res.ok) {
+        console.error("[Feedback] Non-OK response", {
+          status: res.status,
+          contentType,
+          bodyPreview: text.slice(0, 1200),
+        });
+        toast.error("Feedback failed to submit. Classic.");
+        return;
+      }
+
+      if (contentType.includes("application/json")) {
+        try {
+          JSON.parse(text);
+        } catch {
+          // ignore parse errors, not critical
+        }
+      }
+
+      toast.success("Feedback submitted. It will be reviewed in 3–9 business centuries.");
+      closeFeedback();
+    } catch (e) {
+      console.error("[Feedback] Submit failed:", e);
+      toast.error("Feedback submission failed. Probably budget.");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }
+
   return (
     <EnterpriseLayout>
       <TooltipProvider>
+        {/* Lightweight modal overlay for Feedback */}
+        {feedbackOpen && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+            onMouseDown={(e) => {
+              // click outside closes
+              if (e.target === e.currentTarget) closeFeedback();
+            }}
+          >
+            <div className="w-full max-w-2xl rounded-xl border bg-background shadow-xl">
+              <div className="flex items-center justify-between border-b px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="h-5 w-5 text-muted-foreground" />
+                  <div className="font-semibold">Help Center</div>
+                </div>
+                <Button
+                  variant="ghost"
+                  className="h-8 w-8 p-0"
+                  onClick={closeFeedback}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {!showActualFeedbackForm ? (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      Before you submit anything, please review these highly relevant FAQs.
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-medium">Why is my request taking so long?</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Because it is currently pending.
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-medium">Can I expedite this?</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Absolutely. Please submit the same request again in all caps.
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-medium">I need help right now.</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Great. This FAQ acknowledges your urgency.
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-medium">Where can I find more documentation?</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          In the documentation repository. (Not linked.)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <div className="text-xs text-muted-foreground">
+                        If this is not your problem, it’s probably something else.
+                      </div>
+                      <Button
+                        onClick={() => setShowActualFeedbackForm(true)}
+                        className="bg-blue-700 hover:bg-blue-800"
+                      >
+                        It’s something else
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      Fine. You found the actual form.
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="fb-email">Email (optional)</Label>
+                        <Input
+                          id="fb-email"
+                          placeholder="you@company.com"
+                          value={feedbackEmail}
+                          onChange={(e) => setFeedbackEmail(e.target.value)}
+                          autoComplete="email"
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          Only used if you want a response. Or if I panic.
+                        </p>
+                      </div>
+
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="fb-comments">Comments</Label>
+                        <textarea
+                          id="fb-comments"
+                          className="min-h-[140px] w-full rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          placeholder="Describe the issue, idea, or grievance."
+                          value={feedbackComments}
+                          onChange={(e) => setFeedbackComments(e.target.value)}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          Be specific. Or don’t. I’ll still log it.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowActualFeedbackForm(false)}
+                        disabled={feedbackSubmitting}
+                      >
+                        Back to unhelpful FAQ
+                      </Button>
+
+                      <Button
+                        onClick={submitFeedback}
+                        disabled={feedbackSubmitting}
+                        className="bg-blue-700 hover:bg-blue-800"
+                      >
+                        {feedbackSubmitting ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Submitting...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="mr-2 h-4 w-4" />
+                            Submit feedback
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-6">
           <Card className="card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -649,6 +892,31 @@ export default function Dashboard() {
           </div>
 
           <div className="md:col-span-3 space-y-6">
+            {/* Feedback / Help card */}
+            <Card className="card">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                  Need help?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="text-sm text-muted-foreground">
+                  If something is broken, confusing, or suspiciously working… tell me.
+                </div>
+                <Button
+                  onClick={openFeedback}
+                  className="w-full bg-blue-700 hover:bg-blue-800"
+                >
+                  <HelpCircle className="mr-2 h-4 w-4" />
+                  Feedback
+                </Button>
+                <div className="text-[11px] text-muted-foreground">
+                  This button may or may not lead to help.
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="card">
               <CardHeader>
                 <CardTitle className="text-base">Recent Activities</CardTitle>
