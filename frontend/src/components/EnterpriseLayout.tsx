@@ -9,6 +9,7 @@ import {
   Bell,
   Book,
   Activity,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,10 +24,15 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ExperienceSelector } from "@/components/ExperienceSelector";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useExperience } from "utils/experience-context";
-import { ChevronRight } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Props {
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 type NavItem = {
@@ -49,13 +55,10 @@ export function EnterpriseLayout({ children }: Props) {
   ];
 
   const activeNav = useMemo(() => {
-    // Basic matching; you can enhance later for nested routes.
     return navItems.find((n) => location.pathname === n.path) || null;
   }, [location.pathname]);
 
   const crumbs = useMemo(() => {
-    // Route-driven breadcrumb. Experience should NOT rewrite navigation.
-    // If you later add nested routes, expand this mapping.
     if (activeNav) return ["Home", activeNav.label];
     return ["Home"];
   }, [activeNav]);
@@ -97,7 +100,7 @@ export function EnterpriseLayout({ children }: Props) {
             </SheetContent>
           </Sheet>
 
-          {/* Desktop: Portal + top nav always visible */}
+          {/* Desktop nav */}
           <div className="hidden sm:flex items-center gap-6 text-sm font-medium mr-4">
             <Link to="/" className="flex items-center gap-2 font-bold text-lg">
               <LayoutDashboard className="h-5 w-5" />
@@ -124,11 +127,22 @@ export function EnterpriseLayout({ children }: Props) {
               <ExperienceSelector />
             </div>
 
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5" />
-              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-600 animate-pulse" />
-            </Button>
+            {/* Notification bell with tooltip */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="relative">
+                    <Bell className="h-5 w-5" />
+                    <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-600 animate-pulse" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="end">
+                  <span className="text-xs">made ya click</span>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
 
+            {/* User menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="rounded-full">
@@ -150,19 +164,23 @@ export function EnterpriseLayout({ children }: Props) {
           </div>
         </div>
 
-        {/* Optional breadcrumb row (route-driven) */}
+        {/* Breadcrumb row */}
         <div className="hidden sm:block px-6 pb-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             {crumbs.map((c, idx) => (
               <span key={`${c}-${idx}`} className="flex items-center gap-2">
                 {idx > 0 && <ChevronRight className="h-3 w-3" />}
-                <span className={idx === crumbs.length - 1 ? "font-bold text-foreground" : ""}>
+                <span
+                  className={
+                    idx === crumbs.length - 1
+                      ? "font-bold text-foreground"
+                      : ""
+                  }
+                >
                   {c}
                 </span>
               </span>
             ))}
-
-            {/* Small indicator so you can still tell which experience is active without rewriting nav */}
             <span className="ml-3 rounded border px-2 py-0.5 text-[10px] text-muted-foreground">
               Experience: {experience}
             </span>
@@ -170,12 +188,19 @@ export function EnterpriseLayout({ children }: Props) {
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 p-4 sm:px-6 sm:py-0 overflow-auto">{children}</main>
+      {/* Main Content */}
+      <main className="flex-1 p-4 sm:px-6 sm:py-0 overflow-auto">
+        {children}
+      </main>
 
       <footer className="border-t py-4 text-center text-xs text-muted-foreground bg-white dark:bg-slate-950">
-        <p>&copy; {new Date().getFullYear()} PendingJustification Inc. All rights reserved. Working as designed.</p>
-        <p className="mt-1">Internal Use Only. Do not distribute outside of the intranet.</p>
+        <p>
+          &copy; {new Date().getFullYear()} PendingJustification Inc. All rights
+          reserved. Working as designed.
+        </p>
+        <p className="mt-1">
+          Internal Use Only. Do not distribute outside of the intranet.
+        </p>
       </footer>
     </div>
   );
