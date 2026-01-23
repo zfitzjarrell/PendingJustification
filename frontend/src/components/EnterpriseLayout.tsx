@@ -1,4 +1,4 @@
-import { ReactNode, useMemo } from "react";
+import { ReactNode, useMemo, useRef, useCallback, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -45,6 +45,61 @@ export function EnterpriseLayout({ children }: Props) {
   const location = useLocation();
   const { experience } = useExperience();
 
+  // Reuse the same popup window instead of spawning new ones
+  const homeWinRef = useRef<Window | null>(null);
+
+  const openHomePopup = useCallback(() => {
+    const popupUrl = "/home";
+
+    const w = 960;
+    const h = 650;
+
+    // Center relative to current browser window
+    const left = Math.max(
+      0,
+      Math.round(window.screenX + (window.outerWidth - w) / 2)
+    );
+    const top = Math.max(
+      0,
+      Math.round(window.screenY + (window.outerHeight - h) / 2)
+    );
+
+    const features = [
+      `width=${w}`,
+      `height=${h}`,
+      `left=${left}`,
+      `top=${top}`,
+      "resizable=yes",
+      "scrollbars=yes",
+      "toolbar=no",
+      "menubar=no",
+      "location=no",
+      "status=no",
+    ].join(",");
+
+    // If we already opened one and it’s still alive, just focus it.
+    const existing = homeWinRef.current;
+    if (existing && !existing.closed) {
+      existing.focus();
+      return;
+    }
+
+    const win = window.open(popupUrl, "pj-home", features);
+    if (win) {
+      homeWinRef.current = win;
+      win.focus();
+    }
+  }, []);
+
+  // Clean up the ref if user closes the popup
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      const w = homeWinRef.current;
+      if (w && w.closed) homeWinRef.current = null;
+    }, 1500);
+    return () => window.clearInterval(t);
+  }, []);
+
   const navItems: NavItem[] = [
     { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "Tickets", path: "/tickets", icon: FileText },
@@ -78,10 +133,17 @@ export function EnterpriseLayout({ children }: Props) {
             </SheetTrigger>
             <SheetContent side="left" className="sm:max-w-xs">
               <nav className="grid gap-6 text-lg font-medium">
-                <div className="flex items-center gap-2 font-semibold">
+                <button
+                  type="button"
+                  onClick={openHomePopup}
+                  className="flex items-center gap-2 font-semibold text-left"
+                  aria-label="Open Home popup"
+                  title="Open Home"
+                >
                   <LayoutDashboard className="h-6 w-6" />
                   <span>Enterprise Portal</span>
-                </div>
+                </button>
+
                 {navItems.map((item) => (
                   <Link
                     key={item.path}
@@ -102,10 +164,16 @@ export function EnterpriseLayout({ children }: Props) {
 
           {/* Desktop nav */}
           <div className="hidden sm:flex items-center gap-6 text-sm font-medium mr-4">
-            <Link to="/" className="flex items-center gap-2 font-bold text-lg">
+            <button
+              type="button"
+              onClick={openHomePopup}
+              className="flex items-center gap-2 font-bold text-lg hover:opacity-90"
+              aria-label="Open Home popup"
+              title="Open Home"
+            >
               <LayoutDashboard className="h-5 w-5" />
               <span>Portal</span>
-            </Link>
+            </button>
 
             {navItems.map((item) => (
               <Link
@@ -167,20 +235,33 @@ export function EnterpriseLayout({ children }: Props) {
         {/* Breadcrumb row */}
         <div className="hidden sm:block px-6 pb-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {crumbs.map((c, idx) => (
-              <span key={`${c}-${idx}`} className="flex items-center gap-2">
-                {idx > 0 && <ChevronRight className="h-3 w-3" />}
-                <span
-                  className={
-                    idx === crumbs.length - 1
-                      ? "font-bold text-foreground"
-                      : ""
-                  }
-                >
-                  {c}
+            {crumbs.map((c, idx) => {
+              const isHome = idx === 0 && c === "Home";
+              const isLast = idx === crumbs.length - 1;
+
+              return (
+                <span key={`${c}-${idx}`} className="flex items-center gap-2">
+                  {idx > 0 && <ChevronRight className="h-3 w-3" />}
+
+                  {isHome ? (
+                    <button
+                      type="button"
+                      onClick={openHomePopup}
+                      className="hover:text-foreground underline underline-offset-2"
+                      aria-label="Open Home popup"
+                      title="Open Home"
+                    >
+                      {c}
+                    </button>
+                  ) : (
+                    <span className={isLast ? "font-bold text-foreground" : ""}>
+                      {c}
+                    </span>
+                  )}
                 </span>
-              </span>
-            ))}
+              );
+            })}
+
             <span className="ml-3 rounded border px-2 py-0.5 text-[10px] text-muted-foreground">
               Experience: {experience}
             </span>
