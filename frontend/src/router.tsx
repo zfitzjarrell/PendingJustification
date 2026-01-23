@@ -13,6 +13,9 @@ const SomethingWentWrongPage = lazy(() => import("./pages/SomethingWentWrongPage
 // ✅ Add Admin here (manual route, not dependent on user-routes autogen)
 const Admin = lazy(() => import("./pages/Admin"));
 
+// ✅ Retro home popup page
+const Home = lazy(() => import("./pages/Home"));
+
 export const router = createBrowserRouter([
   {
     element: (
@@ -24,6 +27,9 @@ export const router = createBrowserRouter([
     ),
     children: [
       ...userRoutes,
+
+      // ✅ Retro Home popup
+      { path: "/home", element: <Home /> },
 
       // ✅ Register /admin explicitly
       { path: "/admin", element: <Admin /> },
